@@ -1,4 +1,12 @@
 name = "Kimai"
 uuid = "e560169d-8ae4-4606-914c-4876db6bb005"
+license = "MIT"
 authors = ["Peter Bräuer <pb866.git@gmail.com>"]
-version = "0.1.0"
+version = "0.1.0-DEV"
+
+[deps]
+BusinessDays = "4f18b42c-503e-5345-9536-bb0f25fc7038"
+YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
+
+[compat]
+julia = "1"
