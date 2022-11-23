@@ -1,0 +1,8 @@
+# Put in internal recover/<scenario>.yaml file or completely obsolete?
+# Check for yamls in recover and ask to recover at beginning of session
+# Ask to overwrite existing scenarios.
+Recover:
+  log ended: 2022-03-31 23:59:59
+  balance: [0, {}]
+  vacation: 7
+  sickness: 0

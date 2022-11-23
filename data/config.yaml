@@ -1,0 +1,13 @@
+Settings: # REMOVE 'BASIC' when renaming FILES and moving RECOVER?
+  state: SN
+  # workload: 40
+  workdays: 5
+  vacation days: 30
+  vacation deadline: 0001-03-31 # or 31.3.
+  finalyear: #year(unix2datetime(mtime(".git-prompt.sh")))
+
+Datasets:
+  dir: ./data
+  kimai: export.csv
+  vacation: vacation.csv
+  sickness: sickness/sickness.csv
