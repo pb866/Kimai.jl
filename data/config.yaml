@@ -9,5 +9,13 @@ Settings: # REMOVE 'BASIC' when renaming FILES and moving RECOVER?
 Datasets:
   dir: ./data
   kimai: export.csv
-  vacation: vacation.csv
-  sickness: sickness/sickness.csv
+  # Use 0 as default for missing vacation/sickness files?
+  # Pro: No warnings on missing files
+  # Con: More inconvenient, files must actively be specified
+
+# Recover: true # true/false/session name; allow in in config.yaml or kwarg only?
+  # if true:  - starts new session with info about no recoverable session
+  #           - uses session, if only one session available
+  #           - asks, which session to use, if several sessions available
+  # if session name: uses session or throws warnings with `true` behaviour
+  # if false: starts new session
