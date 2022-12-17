@@ -1,4 +1,4 @@
-## Get important information from config.yaml and store in dictionaries settings, files, and recover
+## Get general settings and previous balances from config.yaml and store in dict
 
 # Overload base function to check for empty symbols
 """ Check for empty Symbol (Symbol("")) """
@@ -171,7 +171,7 @@ otherwise return the `default` and warn with a `msg`.
 function checktype(
   container,
   entry,
-  type::DataType,
+  type::Type,
   default,
   msg::String="$entry has type $(typeof(container[entry])), should have type $type; parameter ignored"
 )
