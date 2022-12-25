@@ -39,7 +39,7 @@ All parameters can be overwritten with the following kwargs:
 - `kimai`: file name (and optionally directory) of the Kimai time log
 - `vacation`: file name (and optionally directory) of the vacation dataset or, optionally,
   number of vacation days already taken
-- `sickness`: file name (and optionally directory) of the sick leave dataset or, optionally,
+- `sickdays`: file name (and optionally directory) of the sick leave dataset or, optionally,
   number of sick days in the current year
 
 Furthermore, balances of the last session can be tweaked, which can be useful for the first
@@ -49,7 +49,7 @@ time, when a new position is started.
   - `Real` (`Float` or `Int`) for previously worked hours or
   - `Period` or `CompoundPeriod` for the amount previously worked
 - `vacation_balance` (`Int`): Number of vacation days already taken
-- `sickness_balance` (`Int`): Number of sick leave days previously taken
+- `sickdays_balance` (`Int`): Number of sick leave days previously taken
 
 The order, in which parameters are selected is:
 1. kwargs
@@ -74,7 +74,7 @@ function configure(
   check_dictentry!(data["Recover"], "log ended", kwargs, DateTime, Date(-9999))
   last_balance!(data["Recover"], kwargs)
   check_dictentry!(data["Recover"], "vacation", kwargs, Int, 0, :vacation_balance)
-  check_dictentry!(data["Recover"], "sickness", kwargs, Int, 0, :sickness_balance)
+  check_dictentry!(data["Recover"], "sickdays", kwargs, Int, 0, :sickdays_balance)
 
   ## Datasets and sources
   # Ensure, Datasets section exists in data
@@ -82,14 +82,14 @@ function configure(
   # Fill dict
   check_dictentry!(data["Datasets"], "dir", kwargs, String, ".")
   check_dictentry!(data["Datasets"], "kimai", kwargs, String, "export.csv")
-  check_dictentry!(data["Datasets"], "vacation", kwargs, Union{Int,String}, "vacation.csv")
-  check_dictentry!(data["Datasets"], "sickness", kwargs, Union{Int,String}, "sickness.csv")
+  check_dictentry!(data["Datasets"], "vacation", kwargs, Union{Int,String}, 0)
+  check_dictentry!(data["Datasets"], "sickdays", kwargs, Union{Int,String}, 0)
   # Check files and standardise dict entries
   data["Datasets"]["kimai"] = normfiles(data["Datasets"]["kimai"], data["Datasets"]["dir"], mandatory=true)
   data["Datasets"]["vacation"] isa Int ||
     (data["Datasets"]["vacation"] = normfiles(data["Datasets"]["vacation"], data["Datasets"]["dir"]))
-  data["Datasets"]["sickness"] isa Int ||
-    (data["Datasets"]["sickness"] = normfiles(data["Datasets"]["sickness"], data["Datasets"]["dir"]))
+  data["Datasets"]["sickdays"] isa Int ||
+    (data["Datasets"]["sickdays"] = normfiles(data["Datasets"]["sickdays"], data["Datasets"]["dir"]))
 
   ## General settings
   # Ensure, Settings section exists in data
@@ -226,7 +226,7 @@ function recover_session!(data, recover)::Nothing
     return
   elseif recover == true && length(sessions) == 0
 
-    @info "No previous sessions found. You can adjust last balances with kwargs balance, balance_vacation, and balance_sickness."
+    @info "No previous sessions found. You can adjust last balances with kwargs balance, vacation_balance, and sickdays_balance."
     data["Recover"] = dict()
     return
   elseif recover == true && length(sessions) == 1

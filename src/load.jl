@@ -3,8 +3,8 @@
 """
     load(params::dict, restrict::Bool=true)::dict
 
-Load Kimai, vacation, and sickness data from the files defined in `params` and
-return as ordered dict with entries `"kimai"`, `"vacation"`, and `"sickness"`.
+Load Kimai, vacation, and sickdays data from the files defined in `params` and
+return as ordered dict with entries `"kimai"`, `"vacation"`, and `"sickdays"`.
 
 By default, only vacation and sick days within the Kimai period are counted. If
 future and past off-days should be considered, set `restrict` to false.
@@ -23,7 +23,7 @@ function load(params::dict, restrict::Bool=true)::dict
   stop = restrict ? data["stats"]["stop"] : Date(9999)
   # Load off-days
   load_offdays!(data, params, "vacation"; start, stop)
-  load_offdays!(data, params, "sickness"; start, stop)
+  load_offdays!(data, params, "sickdays"; start, stop)
   # Return Kimai data
   return data
 end
@@ -79,6 +79,7 @@ function load_offdays!(
   # Return empty DataFrame with default columns for non-existing files
   off = params["Datasets"][type]
   if off isa Int
+    off == 0 && @info "$type not specified, use Int or data file to set $type"
     data[type] =  DataFrame(reason=String[type], start=Date[data["stats"]["start"]],
       stop=Date[data["stats"]["stop"]], count=Int[off])
     return data[type]

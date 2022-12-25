@@ -11,7 +11,7 @@ mstoh(ms::Real) = h/3_600_000
     arm(params::dict, restrict::Bool=true)::dict
 
 Load time logs from the files defined in `params` and return a dictionary with
-entries for `"kimai"` `"vacation"`, and `"sickness"` data together with `"stats"`
+entries for `"kimai"` `"vacation"`, and `"sickdays"` data together with `"stats"`
 about work- and off-days and balances.
 
 By default, only vacation and sick days within the Kimai period are considered.
@@ -42,7 +42,7 @@ function calculate!(timelog::dict, params::dict)::dict
   target = countbdays(country, Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
   holidays = countholidays(country, Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
   vacation = sum(timelog["vacation"].count)
-  sickdays = sum(timelog["sickness"].count)
+  sickdays = sum(timelog["sickdays"].count)
   weekends = total - target - holidays
   # Calculate workload and balance and add stats entry to timelog
   workdays = target - vacation - sickdays

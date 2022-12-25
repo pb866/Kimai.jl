@@ -9,7 +9,8 @@ import DataFrames as df
 import DataFrames: DataFrame
 
 # Ensure sessions folder
-isdir(normpath(@__DIR__, "../sessions/")) || mkdir("test")
+sessions = normpath(@__DIR__, "../sessions/")
+isdir(sessions) || mkdir(sessions)
 # Load source files
 include("config.jl")
 include("load.jl")
