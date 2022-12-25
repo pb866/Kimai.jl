@@ -82,8 +82,8 @@ function configure(
   # Fill dict
   check_dictentry!(data["Datasets"], "dir", kwargs, String, ".")
   check_dictentry!(data["Datasets"], "kimai", kwargs, String, "export.csv")
-  check_dictentry!(data["Datasets"], "vacation", kwargs, Union{Int,String}, "vacation.csv", :vacation_balance)
-  check_dictentry!(data["Datasets"], "sickness", kwargs, Union{Int,String}, "sickness.csv", :sickness_balance)
+  check_dictentry!(data["Datasets"], "vacation", kwargs, Union{Int,String}, "vacation.csv")
+  check_dictentry!(data["Datasets"], "sickness", kwargs, Union{Int,String}, "sickness.csv")
   # Check files and standardise dict entries
   data["Datasets"]["kimai"] = normfiles(data["Datasets"]["kimai"], data["Datasets"]["dir"], mandatory=true)
   data["Datasets"]["vacation"] isa Int ||
