@@ -122,15 +122,3 @@ the `start` date is later than the `stop` date.
 function countholidays(calendar::cal.HolidayCalendar, start::Date, stop::Date)::Int
   start > stop ? 0 : length(cal.listholidays(calendar, start, stop))
 end
-
-
-"""
-    countbdays(calendar::cal.HolidayCalendar, start::Date, stop::Date)::Int
-
-Return the number of business days within the `start` and `stop` date (including both edges)
-using the `calender` of a specified region. `0` days are returned for ranges, where
-the start date is later than the stop date.
-"""
-function countbdays(calendar::cal.HolidayCalendar, start::Date, stop::Date)::Int
-  start > stop ? 0 : length(cal.listbdays(calendar, start, stop))
-end
