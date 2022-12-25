@@ -1,3 +1,10 @@
+# Conversion of time units
+""" Convert hours to milliseconds """
+htoms(h::Real) = 3_600_000h
+""" Convert milliseconds to hours """
+mstoh(ms::Real) = h/3_600_000
+
+
 # Calculate balances; helper functions to process times/periods
 
 """
@@ -29,30 +36,34 @@ function calculate!(timelog::dict, params::dict)::dict
   # Initialise
   country = cal.DE(Symbol(params["Settings"]["state"]))
   cal.initcache(country)
-  start = Date(max(timelog["kimai"].in[end], params["Recover"]["log ended"]))
-  stop = Date(timelog["kimai"].out[1])
   # Count work and off days
-  workload = countbdays(country, start, stop)
-  holidays = sum(timelog["vacation"].count)
+  total = countbdays(cal.NullHolidayCalendar(),
+    Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
+  target = countbdays(country, Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
+  holidays = countholidays(country, Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
+  vacation = sum(timelog["vacation"].count)
   sickdays = sum(timelog["sickness"].count)
-  weekends = countbdays(cal.NullHolidayCalendar(), start, stop) - workload - holidays
+  weekends = total - target - holidays
   # Calculate workload and balance and add stats entry to timelog
-  work = workload - holidays - sickdays
-  workdays = daystoworkms(Day(work), params)
-  balance = Dates.toms(sum(timelog["kimai"].time)) - workdays
-  timelog["stats"] = dict(
+  workdays = target - vacation - sickdays
+  workload = daystoworkms(Day(workdays), params)
+  balance = Dates.toms(sum(timelog["kimai"].time)) - workload
+  merge!(timelog["stats"], dict(
+    "total days" => total,
+    "target days" => target,
     "workdays" => workdays,
-    "holidays" => holidays,
+    "vacation" => vacation,
     "sickdays" => sickdays,
+    "holidays" => holidays,
     "weekends" => weekends,
     "workload" => workload,
-    "balance" => balance
-  )
+    "balance" => balance # + params["Recover"]["balance"] here or during show
+  ))
 end
 
 
 """
-    worktime(milliseconds::Real, params; show_weeks::Bool=false)::Dates.CompoundPeriod
+    worktime(milliseconds::Real, params::dict; show_weeks::Bool=false)::Dates.CompoundPeriod
 
 From the `milliseconds` (as `Real`) return a `CompoundPeriod`.
 The `CompoundPeriod` contains a maximum of hours, minutes, and seconds/milliseconds
@@ -60,67 +71,21 @@ as the contracted workload per day.
 Days are redefined as workdays containing the time as defined by the contract (workload/workdays).
 If `show_weeks` is set to true, weeks are shown as number of workdays defined in `params`.
 """
-function worktime(milliseconds::Real, params; show_weeks::Bool=false)::Dates.CompoundPeriod
-  # Conversion factor hours to ms
-  hms = 3_600_000
-  # Get workday in ms from params
-  wday = params["Settings"]["workload"]/params["Settings"]["workdays"]
-  wday_ms = wday * hms
-  # Calculate work time for units hours and smaller
-  hours, rem_time = workhours(milliseconds, wday)
-  # Check that current units do not exceed a workday
-  # otherwise recalculate with corrected values and add larger units (days/weeks)
-  worktime_correction = Dates.toms(hours) - wday_ms
-  if worktime_correction > 0
-    hours, rem_time_correction = workhours(worktime_correction, wday)
-    days = workdays(rem_time*hms + rem_time_correction*hms + wday_ms/wday, params; show_weeks)
+function worktime(milliseconds::Real, params::dict; show_weeks::Bool=false)::Dates.CompoundPeriod
+  # Optionally calculate number of "workweeks"
+  w, rem_time = if show_weeks
+    divrem(milliseconds, htoms(params["Settings"]["workload"]))
   else
-    days = workdays(rem_time*hms, params; show_weeks)
+    0, milliseconds
   end
+  # Calculate work-time
+  d, rem_time = divrem(rem_time, htoms(params["Settings"]["workload"]/params["Settings"]["workdays"]))
+  h, rem_time = divrem(rem_time, htoms(1))
+  m, rem_time = divrem(rem_time, 60_000)
+  s, ms = divrem(rem_time, 1000)
 
-  return days + hours
-end
-
-
-"""
-    workhours(milliseconds::Real, workhours::AbstractFloat)::Tuple{Dates.CompoundPeriod,Real}
-
-From the milliseconds given as `Real`, return a `CompoundPeriod` including
-`hours`, `minutes`, `seconds`, and `milliseconds` and the remaining time in
-`milliseconds` as `Real`. To calculate the `hours` and remaining the
-`workhours` per day are needed.
-"""
-function workhours(milliseconds::Real, workhours::AbstractFloat)::Tuple{Dates.CompoundPeriod,Real}
-  rem_time, msec = divrem(milliseconds, 1000)
-  ms = Millisecond(msec)
-  rem_time, sec = divrem(rem_time, 60)
-  s = Second(sec)
-  rem_time, mins = divrem(rem_time, 60)
-  m = Minute(mins)
-  rem_time, hours = divrem(rem_time, workhours)
-  h = Hour(hours)
-  return h + m + s + ms, rem_time
-end
-
-
-"""
-    workdays(milliseconds, params; show_weeks::Bool=false)::Dates.CompoundPeriod
-
-From the milliseconds given as `Real`, return a `CompoundPeriod` including
-`days`, and if `show_weeks` is set to `true`, `weeks`. Days and weeks are redefined
-as workdays and workweeks from the `workload` and `workdays` in the `params`, i.e.
-a workday is defined as `workload` divided by number of `workdays` and a workweek
-consists of the number of workdays. Workweeks are only shown, if `show_weeks` is
-set to `true`.
-"""
-function workdays(milliseconds, params; show_weeks::Bool=false)::Dates.CompoundPeriod
-  rem_time = div(milliseconds, 3_600_000)
-  if show_weeks
-    weeks, days = divrem(rem_time, params["Settings"]["workdays"])
-    return Week(weeks) + Day(days)
-  else
-    return Day(rem_time)
-  end
+  # Construct a CompoundPeriod
+  Week(w) + Day(d) + Hour(h) + Minute(m) + Second(s) + Millisecond(ms)
 end
 
 
@@ -131,7 +96,31 @@ Convert `days` to a workday, which is defined by the `workload` devided by the n
 of `workdays` in `params`, and return the result in `Millisecond`.
 """
 function daystoworkms(days::Day, params::dict)::Real
-  days.value*params["Settings"]["workload"]/params["Settings"]["workdays"]*3_600_000
+  htoms(days.value*params["Settings"]["workload"]/params["Settings"]["workdays"])
+end
+
+
+"""
+    countbdays(calendar::cal.HolidayCalendar, start::Date, stop::Date)::Int
+
+Return the number of business days within the `start` and `stop` date (including both edges)
+using the `calender` of a specified region. `0` days are returned for ranges, where
+the `start` date is later than the `stop` date.
+"""
+function countbdays(calendar::cal.HolidayCalendar, start::Date, stop::Date)::Int
+  start > stop ? 0 : length(cal.listbdays(calendar, start, stop))
+end
+
+
+"""
+    countholidays(calendar::cal.HolidayCalendar, start::Date, stop::Date)::Int
+
+Return the number of holidays within the `start` and `stop` date (including both edges)
+using the `calender` of a specified region. `0` days are returned for ranges, where
+the `start` date is later than the `stop` date.
+"""
+function countholidays(calendar::cal.HolidayCalendar, start::Date, stop::Date)::Int
+  start > stop ? 0 : length(cal.listholidays(calendar, start, stop))
 end
 
 

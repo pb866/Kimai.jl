@@ -288,39 +288,22 @@ with `0` `hours` or `empty period` `time`. A `:balance` entry in `kwargs` overwr
 entries in `data`.
 """
 function last_balance!(data, kwargs)::Nothing
-  # Define an hour in ms for conversion
-  hms = 3_600_000
   if haskey(kwargs, :balance)
     # Check for kwargs first and set balance in hours or as period depending on input format
     if kwargs[:balance] isa Real
-      data["balance"] = dict(
-        "hours" => kwargs[:balance],
-        "time" => Dates.canonicalize(Dates.CompoundPeriod(Millisecond(kwargs[:balance]*hms)))
-      )
+      data["balance"] =  kwargs[:balance]
     elseif kwargs[:balance] isa Dates.AbstractTime
-      data["balance"] = dict(
-        "hours" => Dates.toms(kwargs[:balance])/hms,
-        "time" => Dates.canonicalize(kwargs[:balance])
-      )
+      data["balance"] = mstoh(Dates.toms(kwargs[:balance]))
     else
       @warn "balance must be number of hours or a period; 0 hours used"
-      data["balance"] = dict(
-        "hours" => 0.0,
-        "time" => Dates.CompoundPeriod()
-      )
+      data["balance"] = 0.0
     end
   elseif haskey(data, "balance")
     # Check for data from config.yaml and set balance
-    data["balance"] = dict(
-      "hours" => data["balance"]/hms,
-      "time" => Dates.canonicalize(Dates.CompoundPeriod(Millisecond(data["balance"])))
-    )
+    data["balance"] = mstoh(data["balance"])
   else
     # Use 0 hours and empty period as default
-    data["balance"] = dict(
-      "hours" => 0.0,
-      "time" => Dates.CompoundPeriod()
-    )
+    data["balance"] = 0.0
   end
   return
 end
