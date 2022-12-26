@@ -19,8 +19,8 @@ function load(params::dict, restrict::Bool=true)::dict
     "start" => DateTime(max(data["kimai"].in[end], params["Recover"]["log ended"])),
     "stop" => DateTime(data["kimai"].out[1])
   )
-  start = restrict ? data["stats"]["start"] : Date(-9999)
-  stop = restrict ? data["stats"]["stop"] : Date(9999)
+  start = restrict ? data["stats"]["start"] : DateTime(-9999)
+  stop = restrict ? data["stats"]["stop"] : DateTime(9999)
   # Load off-days
   load_offdays!(data, params, "vacation"; start, stop)
   load_offdays!(data, params, "sickdays"; start, stop)
@@ -41,13 +41,25 @@ function load_kimai(params::dict)::DataFrame
   # Convert working hours and rename column
   kimai.time = Dates.canonicalize.(kimai.time-Time(0))
 
-  # Convert Date and times
-  kimai.date .*= string(params["Settings"]["finalyear"])
-  kimai.date = Date.(kimai.date, dateformat"d.m.y")
-  # Convert dates
-  [kimai.date[i] > kimai.date[i-1] && (kimai.date[i:end] .-= Year(1)) for i = 2:length(kimai.date)]
-  kimai.in = DateTime.(kimai.date, kimai.in)
-  kimai.out = DateTime.(kimai.date, kimai.out)
+  # Set year
+  current_year = params["Settings"]["finalyear"]
+  start, stop = DateTime[], DateTime[]
+  # Loop over dates
+  for i = 1:length(kimai.date)
+    # Construct DateTime for in/out times
+    date = Date(kimai.date[i]*string(current_year), dateformat"d.m.y")
+    if i > 1 && date > start[end]
+      current_year -= 1
+      date = Date(kimai.date[i]*string(current_year), dateformat"d.m.y")
+    end
+    push!(start, DateTime(date, kimai.in[i]))
+    push!(stop, DateTime(date, kimai.out[i]))
+  end
+  # Convert kimai times
+  kimai.in = start
+  kimai.out = stop
+  # Delete obsolete date column
+  df.select!(kimai, df.Not("date"))
   # Reduce data to current session
   i = findfirst(kimai.out .< params["Recover"]["log ended"])
   isnothing(i) || deleteat!(kimai, i:size(kimai, 1))
