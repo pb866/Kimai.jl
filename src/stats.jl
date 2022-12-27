@@ -19,7 +19,7 @@ If `restrict` is set to `false`, all vacation and sick days defined in the respe
 files are counted.
 """
 function arm(params::dict, restrict::Bool=true)::dict
-  data = load(params, restrict)
+  data = load(params)
   calculate!(data, params)
   return data
 end

@@ -9,21 +9,19 @@ return as ordered dict with entries `"kimai"`, `"vacation"`, and `"sickdays"`.
 By default, only vacation and sick days within the Kimai period are counted. If
 future and past off-days should be considered, set `restrict` to false.
 """
-function load(params::dict, restrict::Bool=true)::dict
+function load(params::dict)::dict
   # Initialise dict
   data = dict()
   # Load Kimai times
   data["kimai"] = load_kimai(params)
   # Set current Kimai period for restriction
   data["stats"] = dict{String,Any}(
-    "start" => DateTime(max(data["kimai"].in[end], params["Recover"]["log ended"])),
-    "stop" => DateTime(data["kimai"].out[1])
+    "start" => data["kimai"].in[end],
+    "stop" => data["kimai"].out[1]
   )
-  start = restrict ? data["stats"]["start"] : DateTime(-9999)
-  stop = restrict ? data["stats"]["stop"] : DateTime(9999)
   # Load off-days
-  load_offdays!(data, params, "vacation"; start, stop)
-  load_offdays!(data, params, "sickdays"; start, stop)
+  load_offdays!(data, params, "vacation")
+  load_offdays!(data, params, "sickdays")
   # Return Kimai data
   return data
 end
@@ -61,7 +59,7 @@ function load_kimai(params::dict)::DataFrame
   # Delete obsolete date column
   df.select!(kimai, df.Not("date"))
   # Reduce data to current session
-  i = findfirst(kimai.out .< params["Recover"]["log ended"])
+  i = findfirst(kimai.out .≤ params["Recover"]["log ended"])
   isnothing(i) || deleteat!(kimai, i:size(kimai, 1))
   # Return kimai dataframe
   return kimai
@@ -84,11 +82,10 @@ the `start` and `stop` day are counted (borders included).
 function load_offdays!(
   data::dict,
   params::dict,
-  type::String;
-  start::DateTime=DateTime(-9999),
-  stop::DateTime=Date(9999)
+  type::String
 )::DataFrame
   # Return empty DataFrame with default columns for non-existing files
+  @show type
   off = params["Datasets"][type]
   if off isa Int
     off == 0 && @info "$type not specified, use Int or data file to set $type"
@@ -100,29 +97,28 @@ function load_offdays!(
     return data[type]
   end
   # Read input file
-  offdays = CSV.read(off, DataFrame, stringtype=String)
+  offdays = CSV.read(off, DataFrame, stringtype=String, stripwhitespace=true)
   # Process dates and convert to date format
-  offstart, offend, count = Date[], Date[], Int[]
-  for date in offdays[!, 1]
+  start, stop, count, reason = Date[], Date[], Int[], String[]
+  for i = 1:size(offdays, 1)
     # Split ranges into start and stop date
-    current_date = strip.(split(date, "-"))
+    current_date = strip.(split(offdays[i, 1], "-"))
     # Process dates, use same stop date as start date for single date
     startdate = Date(current_date[1], dateformat"d.m.y")
     stopdate = length(current_date) == 1 ? startdate : Date(current_date[2], dateformat"d.m.y")
-    push!(offstart, startdate)
-    push!(offend, stopdate)
-    # Count the offdays of current period within start and stop (if given)
-    startdate = startdate > stop ? stop + Day(1) : min(stop, max(start, startdate))
-    stopdate = stopdate < start ? start - Day(1) : min(stop, max(start, stopdate))
-    push!(count, countbdays(cal.DE(:SN), Date(startdate), Date(stopdate)))
+    # Ignore past dates
+    @show startdate, data["stats"]["start"]
+    stopdate > data["stats"]["start"] || continue
+    # Save dates of complete of period, reason, and the number of offdays
+    # Offday count at the edges is restricted to within start and stop date
+    push!(start, startdate)
+    push!(stop, stopdate)
+    push!(reason, offdays[i, 2])
+    push!(count, countbdays(cal.DE(:SN), Date(max(data["stats"]["start"], startdate)),
+      Date(min(data["stats"]["stop"], stopdate))))
   end
-  # Clean up dataframe
-  offdays[!, "start"] = offstart
-  offdays[!, "stop"] = offend
-  offdays[!, "count"] = count
-  offdays[!, 2] = strip.(offdays[!, 2])
-  df.select!(offdays, df.Not(1))
   # Add offdays to dataset
-  data[type] = offdays
-  return offdays
+  colname = names(offdays)[2]
+  data[type] = DataFrame(colname = reason; start, stop, count)
+  return data[type]
 end
