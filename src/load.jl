@@ -106,7 +106,7 @@ function load_offdays!(
     push!(start, startdate)
     push!(stop, stopdate)
     push!(reason, offdays[i, 2])
-    push!(count, countbdays(params["Settings"]["calendar"], startdate, stopdate))
+    push!(count, countbdays(params["tmp"]["calendar"], startdate, stopdate))
     if startdate ≤ data["stats"]["stop"] && stopdate > data["stats"]["stop"]
       # Correct stop date for later balance calculation,
       # if offday period partly overlaps with end of Kimai period
@@ -133,12 +133,10 @@ Add a column `remaining` to the `vacation` DataFrame in `data` with the aid of
 function add_vacationcounter!(data::dict, params::dict)::Nothing
 
   # Setup balance and deadline parameters
-  params["tmp"] = dict(
-    "balance" => params["Settings"]["vacation days"] - params["Recover"]["vacation"],
-    "year" => Date(year(data["stats"]["start"]), 12, 31),
-    "deadline" => params["Settings"]["vacation deadline"] + Year(data["stats"]["start"]),
-    "factor" => max(1, year(params["Settings"]["vacation deadline"]))
-  )
+  params["tmp"]["balance"] = params["Settings"]["vacation days"] - params["Recover"]["vacation"]
+  params["tmp"]["year"] = Date(year(data["stats"]["start"]), 12, 31)
+  params["tmp"]["deadline"] = params["Settings"]["vacation deadline"] + Year(data["stats"]["start"])
+  params["tmp"]["factor"] = max(1, year(params["Settings"]["vacation deadline"]))
   if data["stats"]["start"] > params["tmp"]["deadline"]
     data["tmp"]["deadline"] = Date(year(data["stats"]["start"]),12,31)
   end
@@ -174,7 +172,7 @@ function adjust_balance!(
     # Check correct balance at the end of the year,
     # if vacation starts in old year and ends in new year
     if vacation.start < params["tmp"]["year"] &&
-      params["tmp"]["balance"] - countbdays(params["Settings"]["calendar"], vacation.start, params["tmp"]["year"]) < 0
+      params["tmp"]["balance"] - countbdays(params["tmp"]["calendar"], vacation.start, params["tmp"]["year"]) < 0
       @warn "too much vacation taken before end of year; check whether you are allowed to use next year's vacation"
     end
     n = year(vacation.stop) - year(params["tmp"]["year"])
@@ -185,7 +183,7 @@ function adjust_balance!(
   if vacation.stop > params["tmp"]["deadline"]
     # Calculate unused vacation days and days in current vacation taken before the cap
     overhead = params["tmp"]["balance"] - params["tmp"]["factor"]*params["Settings"]["vacation days"]
-    overlap = countbdays(params["Settings"]["calendar"],
+    overlap = countbdays(params["tmp"]["calendar"],
       vacation.start, params["tmp"]["deadline"])
     # Cap the vacation days to maximum allowed number and print warning
     params["tmp"]["balance"] = min(params["tmp"]["factor"]*params["Settings"]["vacation days"], params["tmp"]["balance"])

@@ -26,29 +26,32 @@ end
 
 
 """
-    calculate!(timelog::dict, params::dict)::dict
+    calculate!(data::dict, params::dict)::dict
 
-Calculate the balance in the `timelog` and add together with other statistics to
-an new `timelog` entry `"stats"`. Positive balances mean overtime delivered,
+Calculate the balance in the `data` and add together with other statistics to
+an new `data` entry `"stats"`. Positive balances mean overtime delivered,
 negative times mean work due. Return the new entry as ordered `dict`.
 """
-function calculate!(timelog::dict, params::dict)::dict
+function calculate!(data::dict, params::dict)::dict
   # Initialise
-  country = cal.DE(Symbol(params["Settings"]["state"]))
-  cal.initcache(country)
+  cal.initcache(params["tmp"]["calendar"])
   # Count work and off days
   total = countbdays(cal.NullHolidayCalendar(),
-    Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
-  target = countbdays(country, Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
-  holidays = countholidays(country, Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
-  vacation = sum(timelog["vacation"].days)
-  sickdays = sum(timelog["sickdays"].days)
+    Date(data["stats"]["start"]), Date(data["stats"]["stop"]))
+  target = countbdays(params["tmp"]["calendar"], Date(data["stats"]["start"]), Date(data["stats"]["stop"]))
+  holidays = countholidays(params["tmp"]["calendar"], Date(data["stats"]["start"]), Date(data["stats"]["stop"]))
+  rows = findall(≤(data["stats"]["stop"]), data["vacation"].stop)
+  current_vacation = @view data["vacation"][rows, :]
+  vacation = sum(current_vacation.days)
+  rows = findall(≤(data["stats"]["stop"]), data["sickdays"].stop)
+  current_sickdays = @view data["sickdays"][rows, :]
+  sickdays = sum(current_sickdays.days)
   weekends = total - target - holidays
-  # Calculate workload and balance and add stats entry to timelog
+  # Calculate workload and balance and add stats entry to data
   workdays = target - vacation - sickdays
   workload = daystoworkms(Day(workdays), params)
-  balance = Dates.toms(sum(timelog["kimai"].time)) - workload
-  merge!(timelog["stats"], dict(
+  balance = Dates.toms(sum(data["kimai"].time)) - workload
+  merge!(data["stats"], dict(
     "total days" => total,
     "target days" => target,
     "workdays" => workdays,

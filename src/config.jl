@@ -104,7 +104,9 @@ function configure(
   default == 1970 && (default = year(today()))
   check_dictentry!(params["Settings"], "finalyear", kwargs, Int, default)
   # Validate/update calendar entries
-  params["Settings"]["calendar"] = cal.DE(Symbol(params["Settings"]["state"]))
+  params["tmp"] = dict{String,Any}(
+    "calendar" => cal.DE(Symbol(params["Settings"]["state"]))
+  )
   if params["Settings"]["vacation deadline"] < Date(0,12,31)
     params["Settings"]["vacation deadline"] = Date(0,12,31)
   end
