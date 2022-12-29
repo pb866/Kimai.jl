@@ -1,13 +1,10 @@
 # Load data from input files
 
 """
-    load(params::dict, restrict::Bool=true)::dict
+    load(params::dict)::dict
 
 Load Kimai, vacation, and sickdays data from the files defined in `params` and
 return as ordered dict with entries `"kimai"`, `"vacation"`, and `"sickdays"`.
-
-By default, only vacation and sick days within the Kimai period are counted. If
-future and past off-days should be considered, set `restrict` to false.
 """
 function load(params::dict)::dict
   # Initialise dict
@@ -70,14 +67,11 @@ end
     function load_offdays!(
       data::dict,
       params::dict,
-      type::String;
-      start::Date=Date(-9999),
-      stop::Date=Date(9999)
+      type::String
     )::DataFrame
 
 Load the `type` of offdays from the `"Datasets"` in `params` to a `DataFrame`,
-add an entry `type` to `data`, and return the `DataFrame`. Only off-days within
-the `start` and `stop` day are counted (borders included).
+add an entry `type` to `data`, and return the `DataFrame`.
 """
 function load_offdays!(
   data::dict,
@@ -85,7 +79,6 @@ function load_offdays!(
   type::String
 )::DataFrame
   # Return empty DataFrame with default columns for non-existing files
-  @show type
   off = params["Datasets"][type]
   if off isa Int
     off == 0 && @info "$type not specified, use Int or data file to set $type"
@@ -107,18 +100,111 @@ function load_offdays!(
     startdate = Date(current_date[1], dateformat"d.m.y")
     stopdate = length(current_date) == 1 ? startdate : Date(current_date[2], dateformat"d.m.y")
     # Ignore past dates
-    @show startdate, data["stats"]["start"]
-    stopdate > data["stats"]["start"] || continue
+    startdate > data["stats"]["start"] || continue
     # Save dates of complete of period, reason, and the number of offdays
     # Offday count at the edges is restricted to within start and stop date
     push!(start, startdate)
     push!(stop, stopdate)
     push!(reason, offdays[i, 2])
-    push!(count, countbdays(cal.DE(:SN), Date(max(data["stats"]["start"], startdate)),
-      Date(min(data["stats"]["stop"], stopdate))))
+    push!(count, countbdays(params["Settings"]["calendar"], startdate, stopdate))
+    if startdate ≤ data["stats"]["stop"] && stopdate > data["stats"]["stop"]
+      # Correct stop date for later balance calculation,
+      # if offday period partly overlaps with end of Kimai period
+      data["stats"]["stop"] = DateTime(stopdate, Time(23,59,59))
+    end
   end
   # Add offdays to dataset
   colname = names(offdays)[2]
-  data[type] = DataFrame(colname = reason; start, stop, count)
-  return data[type]
+  offdays = DataFrame(colname = reason; start, stop, count)
+  df.rename!(offdays, [colname, "start", "stop", "days"])
+  # Save data and add balance counter for vacation
+  data[type] = offdays
+  type == "vacation" && add_vacationcounter!(data, params)
+  return offdays
+end
+
+
+"""
+    add_vacationcounter!(data::dict, params::dict)::Nothing
+
+Add a column `remaining` to the `vacation` DataFrame in `data` with the aid of
+`params`.
+"""
+function add_vacationcounter!(data::dict, params::dict)::Nothing
+
+  # Setup balance and deadline parameters
+  params["tmp"] = dict(
+    "balance" => params["Settings"]["vacation days"] - params["Recover"]["vacation"],
+    "year" => Date(year(data["stats"]["start"]), 12, 31),
+    "deadline" => params["Settings"]["vacation deadline"] + Year(data["stats"]["start"]),
+    "factor" => max(1, year(params["Settings"]["vacation deadline"]))
+  )
+  if data["stats"]["start"] > params["tmp"]["deadline"]
+    data["tmp"]["deadline"] = Date(year(data["stats"]["start"]),12,31)
+  end
+
+  # Check and adjust balance
+  account = Int[]
+  for row in eachrow(data["vacation"])
+    adjust_balance!(account, row, params)
+  end
+  # Add balance to vacation data
+  data["vacation"][!, "remaining"] = account
+  return
+end
+
+
+"""
+    function adjust_balance!(
+      account::Vector{Int},
+      vacation::df.DataFrameRow,
+      params::dict
+    )::Nothing
+
+Add the balance with remaining vacation days to the `account` based on the previous
+balance and other parameters in `params` for the current `vacation`.
+"""
+function adjust_balance!(
+  account::Vector{Int},
+  vacation::df.DataFrameRow,
+  params::dict
+)::Nothing
+  # Add new vacation at the beginning of the new year
+  if vacation.stop > params["tmp"]["year"]
+    # Check correct balance at the end of the year,
+    # if vacation starts in old year and ends in new year
+    if vacation.start < params["tmp"]["year"] &&
+      params["tmp"]["balance"] - countbdays(params["Settings"]["calendar"], vacation.start, params["tmp"]["year"]) < 0
+      @warn "too much vacation taken before end of year; check whether you are allowed to use next year's vacation"
+    end
+    n = year(vacation.stop) - year(params["tmp"]["year"])
+    params["tmp"]["year"] += Year(n)
+    params["tmp"]["balance"] += n*params["Settings"]["vacation days"]
+  end
+  # Cap vacation at vacation deadline
+  if vacation.stop > params["tmp"]["deadline"]
+    # Calculate unused vacation days and days in current vacation taken before the cap
+    overhead = params["tmp"]["balance"] - params["tmp"]["factor"]*params["Settings"]["vacation days"]
+    overlap = countbdays(params["Settings"]["calendar"],
+      vacation.start, params["tmp"]["deadline"])
+    # Cap the vacation days to maximum allowed number and print warning
+    params["tmp"]["balance"] = min(params["tmp"]["factor"]*params["Settings"]["vacation days"], params["tmp"]["balance"])
+    if vacation.start < params["tmp"]["deadline"]
+      # Correct for vacation days taken before the cap
+      params["tmp"]["balance"] += max(min(overlap, overhead), 0)
+      overhead -= overlap
+    end
+    if overhead > 0
+      @warn "$overhead vacation days lost at $(params["tmp"]["deadline"])"
+    end
+    # Update deadline to next year
+    params["tmp"]["deadline"] += Year(1)
+  end
+  # Update balance for all vacation periods and save balance
+  params["tmp"]["balance"] -= vacation.days
+  push!(account, params["tmp"]["balance"])
+  # Warn, if too much vacation is used
+  params["tmp"]["balance"] > 0 || @warn string("not enough vacation left; reduce vacation from ",
+    vacation.start, " – ", vacation.stop, " and subsequent vacations this year")
+  return
 end

@@ -62,7 +62,7 @@ function configure(
   kwargs...
 )::dict
   ## Read config file
-  data = isempty(config) ? dict() : try
+  params = isempty(config) ? dict() : try
     yml.load_file(config, dicttype=dict)
   catch
     @warn "Config file not found or corrupt. Values from kwargs and defaults used."
@@ -70,42 +70,46 @@ function configure(
   end
 
   ## Recover last session
-  recover_session!(data, recover)
-  check_dictentry!(data["Recover"], "log ended", kwargs, DateTime, Date(-9999))
-  last_balance!(data["Recover"], kwargs)
-  check_dictentry!(data["Recover"], "vacation", kwargs, Int, 0, :vacation_balance)
-  check_dictentry!(data["Recover"], "sickdays", kwargs, Int, 0, :sickdays_balance)
+  recover_session!(params, recover)
+  check_dictentry!(params["Recover"], "log ended", kwargs, DateTime, DateTime(-9999))
+  last_balance!(params["Recover"], kwargs)
+  check_dictentry!(params["Recover"], "vacation", kwargs, Int, 0, :vacation_balance)
+  check_dictentry!(params["Recover"], "sickdays", kwargs, Int, 0, :sickdays_balance)
 
   ## Datasets and sources
-  # Ensure, Datasets section exists in data
-  haskey(data, "Datasets") || (data["Datasets"] = dict())
+  # Ensure, Datasets section exists in params
+  haskey(params, "Datasets") || (params["Datasets"] = dict())
   # Fill dict
-  check_dictentry!(data["Datasets"], "dir", kwargs, String, ".")
-  check_dictentry!(data["Datasets"], "kimai", kwargs, String, "export.csv")
-  check_dictentry!(data["Datasets"], "vacation", kwargs, Union{Int,String}, 0)
-  check_dictentry!(data["Datasets"], "sickdays", kwargs, Union{Int,String}, 0)
+  check_dictentry!(params["Datasets"], "dir", kwargs, String, ".")
+  check_dictentry!(params["Datasets"], "kimai", kwargs, String, "export.csv")
+  check_dictentry!(params["Datasets"], "vacation", kwargs, Union{Int,String}, 0)
+  check_dictentry!(params["Datasets"], "sickdays", kwargs, Union{Int,String}, 0)
   # Check files and standardise dict entries
-  data["Datasets"]["kimai"] = normfiles(data["Datasets"]["kimai"], data["Datasets"]["dir"], mandatory=true)
-  data["Datasets"]["vacation"] isa Int ||
-    (data["Datasets"]["vacation"] = normfiles(data["Datasets"]["vacation"], data["Datasets"]["dir"]))
-  data["Datasets"]["sickdays"] isa Int ||
-    (data["Datasets"]["sickdays"] = normfiles(data["Datasets"]["sickdays"], data["Datasets"]["dir"]))
+  params["Datasets"]["kimai"] = normfiles(params["Datasets"]["kimai"], params["Datasets"]["dir"], mandatory=true)
+  params["Datasets"]["vacation"] isa Int ||
+    (params["Datasets"]["vacation"] = normfiles(params["Datasets"]["vacation"], params["Datasets"]["dir"]))
+  params["Datasets"]["sickdays"] isa Int ||
+    (params["Datasets"]["sickdays"] = normfiles(params["Datasets"]["sickdays"], params["Datasets"]["dir"]))
 
   ## General settings
-  # Ensure, Settings section exists in data
-  haskey(data, "Settings") || (data["Settings"] = dict())
+  # Ensure, Settings section exists in params
+  haskey(params, "Settings") || (params["Settings"] = dict())
   # Fill dict
-  check_dictentry!(data["Settings"], "state", kwargs, String, "SN")
-  check_dictentry!(data["Settings"], "workload", kwargs, Real, 40)
-  check_dictentry!(data["Settings"], "workdays", kwargs, Int, 5)
-  check_dictentry!(data["Settings"], "vacation days", kwargs, Int, 30)
-  check_dictentry!(data["Settings"], "vacation deadline", kwargs, Union{String, Date}, Date(0001, 03, 31))
-  default = year(unix2datetime(mtime(data["Datasets"]["kimai"])))
+  check_dictentry!(params["Settings"], "state", kwargs, String, "SN")
+  check_dictentry!(params["Settings"], "workload", kwargs, Real, 40)
+  check_dictentry!(params["Settings"], "workdays", kwargs, Int, 5)
+  check_dictentry!(params["Settings"], "vacation days", kwargs, Int, 30)
+  check_dictentry!(params["Settings"], "vacation deadline", kwargs, Union{String, Date}, Date(0001, 03, 31))
+  default = year(unix2datetime(mtime(params["Datasets"]["kimai"])))
   default == 1970 && (default = year(today()))
-  check_dictentry!(data["Settings"], "finalyear", kwargs, Int, default)
-
+  check_dictentry!(params["Settings"], "finalyear", kwargs, Int, default)
+  # Validate/update calendar entries
+  params["Settings"]["calendar"] = cal.DE(Symbol(params["Settings"]["state"]))
+  if params["Settings"]["vacation deadline"] < Date(0,12,31)
+    params["Settings"]["vacation deadline"] = Date(0,12,31)
+  end
   # Return revised session parameters
-  return data
+  return params
 end
 
 
@@ -126,26 +130,17 @@ function check_dictentry!(collection::dict, entry::String, kwargs, type, default
   # Define standard keyword symbol
   isempty(kw) && (kw = Symbol(join(split(entry), "_")))
   # Define fallback value from config file for non-dates
-  collection[entry] = if haskey(collection, entry) && !isnothing(collection[entry]) && !(default isa Date)
+  collection[entry] = if haskey(collection, entry) && !isnothing(collection[entry]) #&& !(default isa Date)
     msg = "$entry has type $(typeof(collection[entry])), should have type $type; looking for kwarg or default"
     checktype(collection, entry, type, default, msg)
   end
   # Overwrite fallback with kwargs
-  collection[entry] = if haskey(kwargs, kw)
+  if haskey(kwargs, kw)
     # Overwrite fallback with kwarg
-    checktype(kwargs, kw, type, default)
-  elseif default isa Date
-    # Process special case with dates without year
-    if !haskey(collection, entry) || isnothing(collection[entry])
-      default
-    elseif collection[entry] isa Date
-      collection[entry] + Year(today())
-    elseif collection[entry] isa String
-      Date(collection[entry]*string(year(today()) + 1), dateformat"d.m.y")
-    else # type check failed
-      @warn "$entry has type $(typeof(collection[entry])), should have type Date or String; default used"
-      default
-    end
+    collection[entry] = checktype(kwargs, kw, type, default)
+  end
+  collection[entry] = if default isa Date && collection[entry] isa String
+    Date(collection[entry]*"0001", dateformat"d.m.y")
   elseif !haskey(collection, entry) || isnothing(collection[entry])
     # Last fallback: default
     default
@@ -210,39 +205,39 @@ end
 # Helper function to recover balances from previous sessions
 
 """
-    recover_session!(data, recover)::Nothing
+    recover_session!(params, recover)::Nothing
 
-Add an entry "Recover" to `data`. If `recover` is `false` or no previous session exists,
-an empty dict is added to data, if recover is `true`, a dict with recovery data is added
-to `data`. If several previous sessions are saved, the user can choose, which session to
+Add an entry "Recover" to `params`. If `recover` is `false` or no previous session exists,
+an empty dict is added to params, if recover is `true`, a dict with recovery data is added
+to `params`. If several previous sessions are saved, the user can choose, which session to
 recover or pass the session name as `Symbol` with `recover`.
 """
-function recover_session!(data, recover)::Nothing
+function recover_session!(params, recover)::Nothing
   # Get list of previous sessions
   sessions = filter(endswith(".yaml"), readdir(normpath(@__DIR__, "../sessions/"), join=true))
-  # Add recovery data to data based on recover options
+  # Add recovery data to params based on recover options
   if recover == false
-    data["Recover"] = dict()
+    params["Recover"] = dict()
     return
   elseif recover == true && length(sessions) == 0
 
     @info "No previous sessions found. You can adjust last balances with kwargs balance, vacation_balance, and sickdays_balance."
-    data["Recover"] = dict()
+    params["Recover"] = dict()
     return
   elseif recover == true && length(sessions) == 1
     @info "continue previous $(splitext(basename(sessions[1]))[1]) session"
-    retrieve_session!(data, sessions[1])
+    retrieve_session!(params, sessions[1])
   elseif recover == true
     session = select_session(sessions)
-    retrieve_session!(data, session)
+    retrieve_session!(params, session)
   else
     session = joinpath("../sessions/", string(recover, ".yaml"))
     if isfile(session)
-      return retieve_session!(data, session)
+      return retieve_session!(params, session)
     else
       @warn "previous session $recover not found"
       session = select_session(sessions)
-      retrieve_session!(data, session)
+      retrieve_session!(params, session)
     end
   end
   return
@@ -266,14 +261,14 @@ end
 
 
 """
-    retrieve_session!(data, file)::Nothing
+    retrieve_session!(params, file)::Nothing
 
-Retrieve recovery data from the given `file` and merge with `data`.
-Existing `data` entries are overwritten by duplicate keys in the `file`.
+Retrieve recovery data from the given `file` and merge with `params`.
+Existing `params` entries are overwritten by duplicate keys in the `file`.
 """
-function retrieve_session!(data, file)::Nothing
+function retrieve_session!(params, file)::Nothing
   session = yml.load_file(file, dicttype=dict)
-  merge!(data, session)
+  merge!(params, session)
   return
 end
 

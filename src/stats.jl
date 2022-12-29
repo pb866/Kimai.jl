@@ -41,8 +41,8 @@ function calculate!(timelog::dict, params::dict)::dict
     Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
   target = countbdays(country, Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
   holidays = countholidays(country, Date(timelog["stats"]["start"]), Date(timelog["stats"]["stop"]))
-  vacation = sum(timelog["vacation"].count)
-  sickdays = sum(timelog["sickdays"].count)
+  vacation = sum(timelog["vacation"].days)
+  sickdays = sum(timelog["sickdays"].days)
   weekends = total - target - holidays
   # Calculate workload and balance and add stats entry to timelog
   workdays = target - vacation - sickdays
