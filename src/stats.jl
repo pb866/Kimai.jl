@@ -1,8 +1,7 @@
 # Conversion of time units
+
 """ Convert hours to milliseconds """
 htoms(h::Real) = 3_600_000h
-""" Convert milliseconds to hours """
-mstoh(ms::Real) = h/3_600_000
 
 
 # Calculate balances; helper functions to process times/periods
@@ -50,7 +49,7 @@ function calculate!(data::dict, params::dict)::dict
   # Calculate workload and balance and add stats entry to data
   workdays = target - vacation - sickdays
   workload = daystoworkms(Day(workdays), params)
-  balance = Dates.toms(sum(data["kimai"].time)) - workload
+  balance = Dates.toms(sum(data["kimai"].time)) - workload + params["Recover"]["balance"]
   merge!(data["stats"], dict(
     "total days" => total,
     "target days" => target,

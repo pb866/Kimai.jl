@@ -47,7 +47,7 @@ time, when a new position is started.
 
 - `balance`: Use either
   - `Real` (`Float` or `Int`) for previously worked hours or
-  - `Period` or `CompoundPeriod` for the amount previously worked
+  - `Period` or `CompoundPeriod` for previously worked time
 - `vacation_balance` (`Int`): Number of vacation days already taken
 - `sickdays_balance` (`Int`): Number of sick leave days previously taken
 
@@ -288,16 +288,15 @@ function last_balance!(data, kwargs)::Nothing
   if haskey(kwargs, :balance)
     # Check for kwargs first and set balance in hours or as period depending on input format
     if kwargs[:balance] isa Real
-      data["balance"] =  kwargs[:balance]
+      data["balance"] =  htoms(kwargs[:balance])
     elseif kwargs[:balance] isa Dates.AbstractTime
-      data["balance"] = mstoh(Dates.toms(kwargs[:balance]))
+      data["balance"] = Dates.toms(kwargs[:balance])
     else
       @warn "balance must be number of hours or a period; 0 hours used"
       data["balance"] = 0.0
     end
   elseif haskey(data, "balance")
-    # Check for data from config.yaml and set balance
-    data["balance"] = mstoh(data["balance"])
+    return # Internal logs are assumed correct
   else
     # Use 0 hours and empty period as default
     data["balance"] = 0.0
