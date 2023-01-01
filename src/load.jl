@@ -37,7 +37,7 @@ function load_kimai(params::dict)::DataFrame
   kimai.time = Dates.canonicalize.(kimai.time-Time(0))
 
   # Set year
-  current_year = params["Settings"]["finalyear"]
+  current_year = params["Settings"]["final year"]
   start, stop = DateTime[], DateTime[]
   # Loop over dates
   for i = 1:length(kimai.date)
@@ -78,21 +78,32 @@ function load_offdays!(
   params::dict,
   type::String
 )::DataFrame
-  # Return empty DataFrame with default columns for non-existing files
+  # Get current off-day type
   off = params["Datasets"][type]
   if off isa Int
+    # Return DataFrame with given value for current Kimai range, check enough vacation is available
     off == 0 && @info "$type not specified, use Int or data file to set $type"
-    data[type] =  DataFrame(reason=String[type], start=Date[data["stats"]["start"]],
-      stop=Date[data["stats"]["stop"]], count=Int[off])
+    data[type] =  DataFrame(
+      reason=String[type],
+      start=Date[data["stats"]["start"]],
+      stop=Date[data["stats"]["stop"]],
+      days=Int[off],
+    )
+    if type == "vacation"
+      credit = params["Recover"]["vacation"] - off
+      credit < 0 && @warn "not enough vacation left; reduce vacation by $(abs(credit)) days"
+      data[type][!, "remaining"] = Int[credit]
+    end
     return data[type]
   elseif isempty(off)
+    # Return empty DataFrame with default columns for non-existing files
     data[type] = DataFrame(reason=String[], start=Date[], stop=Date[], count=Int[])
     return data[type]
   end
   # Read input file
   offdays = CSV.read(off, DataFrame, stringtype=String, stripwhitespace=true)
   # Process dates and convert to date format
-  start, stop, count, reason = Date[], Date[], Int[], String[]
+  start, stop, days, reason = Date[], Date[], Int[], String[]
   for i = 1:size(offdays, 1)
     # Split ranges into start and stop date
     current_date = strip.(split(offdays[i, 1], "-"))
@@ -106,7 +117,7 @@ function load_offdays!(
     push!(start, startdate)
     push!(stop, stopdate)
     push!(reason, offdays[i, 2])
-    push!(count, countbdays(params["tmp"]["calendar"], startdate, stopdate))
+    push!(days, countbdays(params["tmp"]["calendar"], startdate, stopdate))
     if startdate ≤ data["stats"]["stop"] && stopdate > data["stats"]["stop"]
       # Correct stop date for later balance calculation,
       # if offday period partly overlaps with end of Kimai period
@@ -115,7 +126,7 @@ function load_offdays!(
   end
   # Add offdays to dataset
   colname = names(offdays)[2]
-  offdays = DataFrame(colname = reason; start, stop, count)
+  offdays = DataFrame(colname = reason; start, stop, days)
   df.rename!(offdays, [colname, "start", "stop", "days"])
   # Save data and add balance counter for vacation
   data[type] = offdays
@@ -133,7 +144,7 @@ Add a column `remaining` to the `vacation` DataFrame in `data` with the aid of
 function add_vacationcounter!(data::dict, params::dict)::Nothing
 
   # Setup balance and deadline parameters
-  params["tmp"]["balance"] = params["Settings"]["vacation days"] - params["Recover"]["vacation"]
+  params["tmp"]["balance"] = params["Recover"]["vacation"]
   params["tmp"]["year"] = Date(year(data["stats"]["start"]), 12, 31)
   params["tmp"]["deadline"] = params["Settings"]["vacation deadline"] + Year(data["stats"]["start"])
   params["tmp"]["factor"] = max(1, year(params["Settings"]["vacation deadline"]))

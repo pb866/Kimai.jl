@@ -32,7 +32,7 @@ All parameters can be overwritten with the following kwargs:
     if you don't have to work on holidays)
   - 0001-03-31 (or "31.3." or "31.03."), if you have to use your vacation by 31. March of the next year
   - 9999-12-31, if you don't have a limit, when your vacation needs to be taken
-- `finalyear`: last year in your Kimai history (first line of file, which should be
+- `final_year`: last year in your Kimai history (first line of file, which should be
   listed anti-chronological), by default the modification date of the Kimai file is used
 - `dir`: directory, where all your dataset files are stored
   (can be overwritten by passing the directory plus file name in the follwoing arguments)
@@ -50,6 +50,12 @@ time, when a new position is started.
   - `Period` or `CompoundPeriod` for previously worked time
 - `vacation_balance` (`Int`): Number of vacation days already taken
 - `sickdays_balance` (`Int`): Number of sick leave days previously taken
+- `correct_balance`: Use either
+  - `Real` to add (or substract with negative numbers) hours from the previous balance
+  - or a pos./neg. `AbstractTime` (`Period` or `CompoundPeriod`) to add/substrict time from balance
+- `correct_vacation`/`correct_sickdays` use either
+  - a pos./neg. `Int` to add/substract the number of respective off-days from previous balance or
+  - a pos./neg. `AbstractTime` to add/substract number of off-days rounded to full days
 
 The order, in which parameters are selected is:
 1. kwargs
@@ -69,21 +75,14 @@ function configure(
     dict()
   end
 
-  ## Recover last session
-  recover_session!(params, recover)
-  check_dictentry!(params["Recover"], "log ended", kwargs, DateTime, DateTime(-9999))
-  last_balance!(params["Recover"], kwargs)
-  check_dictentry!(params["Recover"], "vacation", kwargs, Int, 0, :vacation_balance)
-  check_dictentry!(params["Recover"], "sickdays", kwargs, Int, 0, :sickdays_balance)
-
   ## Datasets and sources
   # Ensure, Datasets section exists in params
   haskey(params, "Datasets") || (params["Datasets"] = dict())
   # Fill dict
-  check_dictentry!(params["Datasets"], "dir", kwargs, String, ".")
-  check_dictentry!(params["Datasets"], "kimai", kwargs, String, "export.csv")
-  check_dictentry!(params["Datasets"], "vacation", kwargs, Union{Int,String}, 0)
-  check_dictentry!(params["Datasets"], "sickdays", kwargs, Union{Int,String}, 0)
+  check_dictentry!(params, "Datasets", "dir", kwargs, String, ".")
+  check_dictentry!(params, "Datasets", "kimai", kwargs, String, "export.csv")
+  check_dictentry!(params, "Datasets", "vacation", kwargs, Union{Int,String}, 0)
+  check_dictentry!(params, "Datasets", "sickdays", kwargs, Union{Int,String}, 0)
   # Check files and standardise dict entries
   params["Datasets"]["kimai"] = normfiles(params["Datasets"]["kimai"], params["Datasets"]["dir"], mandatory=true)
   params["Datasets"]["vacation"] isa Int ||
@@ -95,14 +94,14 @@ function configure(
   # Ensure, Settings section exists in params
   haskey(params, "Settings") || (params["Settings"] = dict())
   # Fill dict
-  check_dictentry!(params["Settings"], "state", kwargs, String, "SN")
-  check_dictentry!(params["Settings"], "workload", kwargs, Real, 40)
-  check_dictentry!(params["Settings"], "workdays", kwargs, Int, 5)
-  check_dictentry!(params["Settings"], "vacation days", kwargs, Int, 30)
-  check_dictentry!(params["Settings"], "vacation deadline", kwargs, Union{String, Date}, Date(0001, 03, 31))
+  check_dictentry!(params, "Settings", "state", kwargs, String, "SN")
+  check_dictentry!(params, "Settings", "workload", kwargs, Real, 40)
+  check_dictentry!(params, "Settings", "workdays", kwargs, Int, 5)
+  check_dictentry!(params, "Settings", "vacation days", kwargs, Int, 30)
+  check_dictentry!(params, "Settings", "vacation deadline", kwargs, Union{String, Date}, Date(0001, 03, 31))
   default = year(unix2datetime(mtime(params["Datasets"]["kimai"])))
   default == 1970 && (default = year(today()))
-  check_dictentry!(params["Settings"], "finalyear", kwargs, Int, default)
+  check_dictentry!(params, "Settings", "final year", kwargs, Int, default)
   # Validate/update calendar entries
   params["tmp"] = dict{String,Any}(
     "calendar" => cal.DE(Symbol(params["Settings"]["state"]))
@@ -110,6 +109,17 @@ function configure(
   if params["Settings"]["vacation deadline"] < Date(0,12,31)
     params["Settings"]["vacation deadline"] = Date(0,12,31)
   end
+
+  ## Recover last session
+  recover_session!(params, recover)
+  check_dictentry!(params, "Recover", "log ended", kwargs, DateTime, DateTime(-9999))
+  last_balance!(params["Recover"], kwargs)
+  check_dictentry!(params, "Recover", "vacation", kwargs, Int, params["Settings"]["vacation days"], section_in_kw=true)
+  check_dictentry!(params, "Recover", "sickdays", kwargs, Int, 0, section_in_kw=true)
+  # Correct previous balance with kwargs/check user input
+  correct_dates!(params["Recover"], "balance", kwargs)
+  correct_dates!(params["Recover"], "vacation", kwargs)
+  correct_dates!(params["Recover"], "sickdays", kwargs)
   # Return revised session parameters
   return params
 end
@@ -118,36 +128,63 @@ end
 # Helper functions to validate input
 
 """
-    check_dictentry!(collection::dict, entry::String, kwargs, type, default, kw::Symbol=Symbol(""))::Nothing
+    function check_dictentry!(
+      collection::dict,
+      section::String,
+      entry::String,
+      kwargs,
+      type,
+      default;
+      section_in_kw::Bool=false,
+      kw::Symbol=Symbol("")
+    )::Nothing
 
-Check `entry` exists in `collection` and is of the specified `type` and not nothing,
-otherwise add an entry to the `collection` from `kwargs`, if provided, or use `default`
-value for missing data.
+Check `entry` exists in the `section` of `collection` (nested dicts) and is of
+the specified `type` and not nothing, otherwise add an entry to the `collection`
+from `kwargs`, if provided, or use `default` value for missing data.
 
-For `Date` values add the year. If the date is passed as String assume a date format
-"dd.mm.yyyy".
+For `Date` values given as `String` without the year in the format `"dd.mm"` add the `Year(1)`.
+Keyword arguments defining the `entry` are assumed to have the same `Symbol` name as `entry`
+with spaces replaced by underscores (`_`). If, `section_in_kw` is set to `true` names are
+prepended by the section name as `<section>_<entry_name>`. Alternatively, keyword argument names
+can be freely chosen with the `kw` keyword argument.
 """
-function check_dictentry!(collection::dict, entry::String, kwargs, type, default, kw::Symbol=Symbol(""))::Nothing
-
+function check_dictentry!(
+  collection::dict,
+  section::String,
+  entry::String,
+  kwargs,
+  type,
+  default;
+  section_in_kw::Bool=false,
+  kw::Symbol=Symbol("")
+)::Nothing
   # Define standard keyword symbol
-  isempty(kw) && (kw = Symbol(join(split(entry), "_")))
+  kw = if !isempty(kw)
+    kw
+  elseif section_in_kw
+    Symbol(join([lowercase(section); split(entry)...], "_"))
+  else
+    Symbol(join(split(entry), "_"))
+  end
   # Define fallback value from config file for non-dates
-  collection[entry] = if haskey(collection, entry) && !isnothing(collection[entry]) #&& !(default isa Date)
-    msg = "$entry has type $(typeof(collection[entry])), should have type $type; looking for kwarg or default"
-    checktype(collection, entry, type, default, msg)
+  collection[section][entry] =
+  if haskey(collection[section], entry) && !isnothing(collection[section][entry])
+    msg = "$entry has type $(typeof(collection[section][entry])), should have type $type; looking for kwarg or default"
+    checktype(collection[section], entry, type, default, msg)
   end
   # Overwrite fallback with kwargs
   if haskey(kwargs, kw)
     # Overwrite fallback with kwarg
-    collection[entry] = checktype(kwargs, kw, type, default)
+    collection[section][entry] = checktype(kwargs, kw, type, default)
   end
-  collection[entry] = if default isa Date && collection[entry] isa String
-    Date(collection[entry]*"0001", dateformat"d.m.y")
-  elseif !haskey(collection, entry) || isnothing(collection[entry])
+  collection[section][entry] = if default isa Date && collection[section][entry] isa String
+    Date(collection[section][entry]*"0001", dateformat"d.m.y")
+  elseif !haskey(collection[section], entry) || isnothing(collection[section][entry])
     # Last fallback: default
     default
   else
-    collection[entry]
+    collection[section][entry]
   end
   return # return nothing
 end
@@ -156,8 +193,8 @@ end
 """
     function checktype(
       container,
-      entry,
-      type,
+      entry::Union{String,Symbol},
+      type::Type,
       default,
       msg::String="\$entry has type \$(typeof(container[entry])), should have type \$type; parameter ignored"
     )
@@ -167,7 +204,7 @@ otherwise return the `default` and warn with a `msg`.
 """
 function checktype(
   container,
-  entry,
+  entry::Union{String,Symbol},
   type::Type,
   default,
   msg::String="$entry has type $(typeof(container[entry])), should have type $type; parameter ignored"
@@ -178,6 +215,37 @@ function checktype(
     @warn msg
     return default
   end
+end
+
+
+"""
+    correct_dates!(data::dict, type::String, kwargs)
+
+Add or subract times defined in the `kwargs` to the `type` in `data`.
+
+The following `type`s can be manipulated:
+- `"balance"`:
+  - add/substract hours with a pos./neg. `Real` to the previous `balance`
+  - add/substract times with a pos./neg. `AbstractTime` (`Period` or `CompoundPeriod`)
+- `"vacation"`/`"sickdays"`:
+  - add/substract days with a pos./neg. `Int` to the previous balance
+  - add/substract times with a pos./neg. `AbstractTime` (`Period` or `CompoundPeriod`)
+    - times are rounded to full days
+"""
+function correct_dates!(data::dict, type::String, kwargs)
+  # Define keyword argument
+  kw = Symbol("correct_"*type)
+  date = haskey(kwargs, kw) ? kwargs[kw] : return
+  if date isa Dates.AbstractTime
+    date = Dates.toms(date)
+    data[type] += type == "balance" ? date : mstoday(data)
+  elseif date isa Real
+    data[type] += type == "balance" ? htoms(date) : date
+  else
+    @warn "$kw has type $(typeof(date)), but should be a period or number; correction not applied"
+  end
+
+  return
 end
 
 

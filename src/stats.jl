@@ -4,6 +4,10 @@
 htoms(h::Real) = 3_600_000h
 
 
+""" Convert ms to days """
+mstoday(ms::Real)::Int = round(Int, ms/86_400_000, RoundNearestTiesUp)
+
+
 # Calculate balances; helper functions to process times/periods
 
 """
@@ -27,8 +31,8 @@ end
 """
     calculate!(data::dict, params::dict)::dict
 
-Calculate the balance in the `data` and add together with other statistics to
-an new `data` entry `"stats"`. Positive balances mean overtime delivered,
+Calculate balances in the `data` and add together with other statistics to
+a new `data` entry `"stats"`. Positive balances mean overtime delivered,
 negative times mean work due. Return the new entry as ordered `dict`.
 """
 function calculate!(data::dict, params::dict)::dict
