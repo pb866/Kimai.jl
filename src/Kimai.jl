@@ -1,6 +1,7 @@
 module Kimai
 
 using Dates
+import Logging
 import OrderedCollections.OrderedDict as dict
 import BusinessDays as cal
 import YAML as yml

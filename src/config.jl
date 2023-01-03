@@ -57,6 +57,17 @@ time, when a new position is started.
   - a pos./neg. `Int` to add/substract the number of respective off-days from previous balance or
   - a pos./neg. `AbstractTime` to add/substract number of off-days rounded to full days
 
+Logging can be influenced with kwargs:
+
+- `loglevel` (`String`): Set the minimum log level to either `"Debug"`, `"Info"`, `"Warn"` or
+  `"Error` (default: `"Info"`)
+- `low_vacation`: Set the number of vacation days left for which an info will be issued,
+  when the number is reached or less. If a vector of 2 ints is passed instead of an int,
+  the first number is the threshold for an info, the second for a warning instead of an info.
+- `unused_vacation`: Set a threshold, how many days in advance an info should be issued of
+  expiring vacation days. If a vector of 2 ints is passed instead of an int,
+  the first number is the threshold for an info, the second for a warning instead of an info.
+
 The order, in which parameters are selected is:
 1. kwargs
 2. config.yaml
@@ -71,12 +82,23 @@ function configure(
   params = isempty(config) ? dict() : try
     yml.load_file(config, dicttype=dict)
   catch
-    @warn "Config file not found or corrupt. Values from kwargs and defaults used."
+    @warn("Config file not found or corrupt. Values from kwargs and defaults used.",
+      _module=nothing, _group=nothing, _file=nothing, _line=nothing)
     dict()
   end
 
+  ## Setup logging
+  # Ensure Log section exists in params
+  haskey(params, "Log") || (params["Log"] = dict())
+  # Check and set the minimum log level
+  check_dictentry!(params, "Log", "loglevel", kwargs, String, "Info")
+  set_logger(params["Log"]["loglevel"])
+  # Validate threshold vor low and unused vacation
+  define_warn_levels(params["Log"], "low vacation", kwargs, [5, -1])
+  define_warn_levels(params["Log"], "unused vacation", kwargs, [60, 20])
+
   ## Datasets and sources
-  # Ensure, Datasets section exists in params
+  # Ensure Datasets section exists in params
   haskey(params, "Datasets") || (params["Datasets"] = dict())
   # Fill dict
   check_dictentry!(params, "Datasets", "dir", kwargs, String, ".")
@@ -180,7 +202,7 @@ function check_dictentry!(
   end
   collection[section][entry] = if default isa Date && collection[section][entry] isa String
     Date(collection[section][entry]*"0001", dateformat"d.m.y")
-  elseif !haskey(collection[section], entry) || isnothing(collection[section][entry])
+  elseif isnothing(collection[section][entry])
     # Last fallback: default
     default
   else
@@ -212,7 +234,7 @@ function checktype(
   if container[entry] isa type
     return container[entry]
   else
-    @warn msg
+    @warn msg _module=nothing _group=nothing _file=nothing _line=nothing
     return default
   end
 end
@@ -221,15 +243,15 @@ end
 """
     correct_dates!(data::dict, type::String, kwargs)
 
-Add or subract times defined in the `kwargs` to the `type` in `data`.
+Add or subtract times defined in the `kwargs` to the `type` in `data`.
 
 The following `type`s can be manipulated:
 - `"balance"`:
-  - add/substract hours with a pos./neg. `Real` to the previous `balance`
-  - add/substract times with a pos./neg. `AbstractTime` (`Period` or `CompoundPeriod`)
+  - add/subtract hours with a pos./neg. `Real` to the previous `balance`
+  - add/subtract times with a pos./neg. `AbstractTime` (`Period` or `CompoundPeriod`)
 - `"vacation"`/`"sickdays"`:
-  - add/substract days with a pos./neg. `Int` to the previous balance
-  - add/substract times with a pos./neg. `AbstractTime` (`Period` or `CompoundPeriod`)
+  - add/subtract days with a pos./neg. `Int` to the previous balance
+  - add/subtract times with a pos./neg. `AbstractTime` (`Period` or `CompoundPeriod`)
     - times are rounded to full days
 """
 function correct_dates!(data::dict, type::String, kwargs)
@@ -242,7 +264,8 @@ function correct_dates!(data::dict, type::String, kwargs)
   elseif date isa Real
     data[type] += type == "balance" ? htoms(date) : date
   else
-    @warn "$kw has type $(typeof(date)), but should be a period or number; correction not applied"
+    @warn("$kw has type $(typeof(date)), but should be a period or number; correction not applied",
+       _module=nothing, _group=nothing, _file=nothing, _line=nothing)
   end
 
   return
@@ -262,9 +285,9 @@ function normfiles(file::AbstractString, dir::AbstractString; mandatory=false, a
   abs && (file = abspath(file))
   # Check file exists and warn or throw error for mandatory files
   if !isfile(file) && mandatory
-    throw(@error "$file does not exist")
+    @error "$file does not exist; Kimai time log needed" _module=nothing _group=nothing _file=nothing _line=nothing
   elseif !isfile(file)
-    @warn "$file does not exist; 0 days used instead"
+    @warn "$file does not exist; 0 days used instead" _module=nothing _group=nothing _file=nothing _line=nothing
     file = ""
   end
 
@@ -305,7 +328,7 @@ function recover_session!(params, recover)::Nothing
     if isfile(session)
       return retieve_session!(params, session)
     else
-      @warn "previous session $recover not found"
+      @warn "previous session $recover not found" _module=nothing _group=nothing _file=nothing _line=nothing
       session = select_session(sessions)
       retrieve_session!(params, session)
     end
@@ -360,7 +383,7 @@ function last_balance!(data, kwargs)::Nothing
     elseif kwargs[:balance] isa Dates.AbstractTime
       data["balance"] = Dates.toms(kwargs[:balance])
     else
-      @warn "balance must be number of hours or a period; 0 hours used"
+      @warn "balance must be number of hours or a period; 0 hours used" _module=nothing _group=nothing _file=nothing _line=nothing
       data["balance"] = 0.0
     end
   elseif haskey(data, "balance")
@@ -368,6 +391,88 @@ function last_balance!(data, kwargs)::Nothing
   else
     # Use 0 hours and empty period as default
     data["balance"] = 0.0
+  end
+  return
+end
+
+
+# Helper functions to set up logging events
+
+"""
+    set_logger(level::String="Info")::Logging.ConsoleLogger
+
+Set the minimum log `level` to either `Debug`, `Info`, `Warn` or `Error`.
+"""
+function set_logger(level::String="Info")::Logging.ConsoleLogger
+  log = Dict(
+    "Debug" => Logging.Debug,
+    "Info" => Logging.Info,
+    "Warn" => Logging.Warn,
+    "Error" => Logging.Error
+  )
+  # loglevel = convert(Base.CoreLogging.LogLevel, level[log]) # Levels: -1000, 0, 1000, 2000
+  logger = Logging.ConsoleLogger(stdout, log[level])
+  Logging.global_logger(logger)
+end
+
+
+"""
+    define_warn_levels(
+      log::dict,
+      event::String,
+      kwargs,
+      default;
+      kw::Symbol=Symbol(""),
+      type::Type=Union{Int,Vector{Int}}
+    )::Nothing
+
+For the `event` in `log` (`dict` entry) define thresholds for log events (info and warning)
+based on the the config.yaml information saved in the `event`, which can be overwritten by
+`kwargs` or use the `default` values. `kwargs` entries are defined by `kw`.
+Additionally, check that the correct `type` of the `event` is used.
+"""
+function define_warn_levels(
+  log::dict,
+  event::String,
+  kwargs,
+  default;
+  kw::Symbol=Symbol(""),
+  type::Type=Union{Int,Vector{Int}}
+)::Nothing
+  # Define standard keyword symbol
+  kw = isempty(kw) ? Symbol(join(split(event), "_")) : kw
+  # Get log settings from kwargs, config.yaml or defaults
+  log[event] =
+  if haskey(kwargs, kw)
+    checktype(kwargs, kw, type, default)
+  elseif haskey(log, event) && !isnothing(log[event])
+    msg = "$event has type $(typeof(log[event])), should have type $type; looking for kwarg or default"
+    checktype(log, event, type, default, msg)
+  else
+    default
+  end
+  # Ensure thresholds for infos and warnings
+  set_log_thresholds!(log, event, default)
+  return # return nothing
+end
+
+
+"""
+    set_log_thresholds!(log::dict, event::String, default)::Nothing
+
+For the `event` in `log`, ensure that a threshold for info and one for warnings exists.
+If only one value is given, use it as information threshold and add a warning threshold
+from the default values. Warn, if more than 2 values are given, about unused parameters.
+"""
+function set_log_thresholds!(log::dict, event::String, default)::Nothing
+  if log[event] isa Vector
+    if length(log[event]) ==1
+      push!(log[event], default[2])
+    elseif length(log[event]) > 2
+      @warn "only first 2 items in array for $event are considered" _module=nothing _group=nothing _file=nothing _line=nothing
+    end
+  else
+    log[event] = [log[event], default[2]]
   end
   return
 end

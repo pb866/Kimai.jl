@@ -19,6 +19,8 @@ function load(params::dict)::dict
   # Load off-days
   load_offdays!(data, params, "vacation")
   load_offdays!(data, params, "sickdays")
+  # Check vacation, issue warnings for low credit/unused vacation
+  check_vacationcredit(data, params)
   # Return Kimai data
   return data
 end
@@ -91,13 +93,24 @@ function load_offdays!(
     )
     if type == "vacation"
       credit = params["Recover"]["vacation"] - off
-      credit < 0 && @warn "not enough vacation left; reduce vacation by $(abs(credit)) days"
+      credit < 0 && @warn("not enough vacation left; reduce vacation by $(abs(credit)) days",
+         _module=nothing, _group=nothing, _file=nothing, _line=nothing)
       data[type][!, "remaining"] = Int[credit]
     end
+    # Save tmp data and return the new data section
+    save_tmp!(data, params)
     return data[type]
   elseif isempty(off)
     # Return empty DataFrame with default columns for non-existing files
-    data[type] = DataFrame(reason=String[], start=Date[], stop=Date[], count=Int[])
+    data[type] =  DataFrame(
+      reason=String[type],
+      start=Date[data["stats"]["start"]],
+      stop=Date[data["stats"]["stop"]],
+      days=Int[0],
+      remaining=Int[params["Settings"]["vacation days"]],
+    )
+    # Save tmp data and return the new data section
+    save_tmp!(data, params)
     return data[type]
   end
   # Read input file
@@ -128,6 +141,8 @@ function load_offdays!(
   colname = names(offdays)[2]
   offdays = DataFrame(colname = reason; start, stop, days)
   df.rename!(offdays, [colname, "start", "stop", "days"])
+  # Ensure, DataFrame is not empty
+  isempty(offdays) && push!(offdays, (type, data["stats"]["start"], data["stats"]["stop"], 0))
   # Save data and add balance counter for vacation
   data[type] = offdays
   type == "vacation" && add_vacationcounter!(data, params)
@@ -144,13 +159,7 @@ Add a column `remaining` to the `vacation` DataFrame in `data` with the aid of
 function add_vacationcounter!(data::dict, params::dict)::Nothing
 
   # Setup balance and deadline parameters
-  params["tmp"]["balance"] = params["Recover"]["vacation"]
-  params["tmp"]["year"] = Date(year(data["stats"]["start"]), 12, 31)
-  params["tmp"]["deadline"] = params["Settings"]["vacation deadline"] + Year(data["stats"]["start"])
-  params["tmp"]["factor"] = max(1, year(params["Settings"]["vacation deadline"]))
-  if data["stats"]["start"] > params["tmp"]["deadline"]
-    data["tmp"]["deadline"] = Date(year(data["stats"]["start"]),12,31)
-  end
+  save_tmp!(data, params)
 
   # Check and adjust balance
   account = Int[]
@@ -182,9 +191,10 @@ function adjust_balance!(
   if vacation.stop > params["tmp"]["year"]
     # Check correct balance at the end of the year,
     # if vacation starts in old year and ends in new year
-    if vacation.start < params["tmp"]["year"] &&
+    if vacation.start ≤ params["tmp"]["year"] &&
       params["tmp"]["balance"] - countbdays(params["tmp"]["calendar"], vacation.start, params["tmp"]["year"]) < 0
-      @warn "too much vacation taken before end of year; check whether you are allowed to use next year's vacation"
+      @warn("too much vacation taken before end of year; check whether you are allowed to use next year's vacation",
+         _module=nothing, _group=nothing, _file=nothing, _line=nothing)
     end
     n = year(vacation.stop) - year(params["tmp"]["year"])
     params["tmp"]["year"] += Year(n)
@@ -198,13 +208,14 @@ function adjust_balance!(
       vacation.start, params["tmp"]["deadline"])
     # Cap the vacation days to maximum allowed number and print warning
     params["tmp"]["balance"] = min(params["tmp"]["factor"]*params["Settings"]["vacation days"], params["tmp"]["balance"])
-    if vacation.start < params["tmp"]["deadline"]
+    if vacation.start ≤ params["tmp"]["deadline"]
       # Correct for vacation days taken before the cap
       params["tmp"]["balance"] += max(min(overlap, overhead), 0)
       overhead -= overlap
     end
     if overhead > 0
-      @warn "$overhead vacation days lost at $(params["tmp"]["deadline"])"
+      @warn("$overhead vacation days lost at $(params["tmp"]["deadline"])",
+        _module=nothing, _group=nothing, _file=nothing, _line=nothing)
     end
     # Update deadline to next year
     params["tmp"]["deadline"] += Year(1)
@@ -213,7 +224,53 @@ function adjust_balance!(
   params["tmp"]["balance"] -= vacation.days
   push!(account, params["tmp"]["balance"])
   # Warn, if too much vacation is used
-  params["tmp"]["balance"] > 0 || @warn string("not enough vacation left; reduce vacation from ",
-    vacation.start, " – ", vacation.stop, " and subsequent vacations this year")
+  params["tmp"]["balance"] > 0 || @warn(string("not enough vacation left; reduce vacation from ",
+    vacation.start, " – ", vacation.stop, " and subsequent vacations this year"),
+     _module=nothing, _group=nothing, _file=nothing, _line=nothing)
+  return
+end
+
+
+
+"""
+    check_vacationcredit(data::dict, params::dict)::Nothing
+
+Issue infos or warnings about low or expiring vacation stored in `data` using
+thresholds defined in `params`.
+"""
+function check_vacationcredit(data::dict, params::dict)::Nothing
+  # Get data about unused vacation and the deadline
+  deadline = Date(year(today()), Dates.monthday(params["Settings"]["vacation deadline"])...)
+  unused = data["vacation"].remaining[end] - params["tmp"]["factor"] * params["Settings"]["vacation days"]
+  days_left = deadline - today()
+  # Warn of vacation days running low
+  if 0 < unused ≤ params["Log"]["low vacation"][2]
+    @warn "vacation credit running low; $unused day left" _module=nothing _group=nothing _file=nothing _line=nothing
+  elseif 0 < unused ≤ params["Log"]["low vacation"][1]
+    @info "vacation credit running low; $unused day left"
+  end
+  # Warn of unused vacation days
+  if unused > 0  && days_left < Day(params["Log"]["unused vacation"][2])
+    @warn "$unused unused vacation day(s) expire at $deadline" _module=nothing _group=nothing _file=nothing _line=nothing
+  elseif unused > 0  && days_left < Day(params["Log"]["unused vacation"][1])
+    @info "$unused unused vacation day(s) expire at $deadline"
+  end
+  return
+end
+
+
+"""
+    save_tmp!(data::dict, params::dict)::Nothing
+
+Save parameters calculated from `params` and `data` to a `"tmp"` section in `data`.
+"""
+function save_tmp!(data::dict, params::dict)::Nothing
+  params["tmp"]["balance"] = params["Recover"]["vacation"]
+  params["tmp"]["year"] = Date(year(data["stats"]["start"]), 12, 31)
+  params["tmp"]["deadline"] = params["Settings"]["vacation deadline"] + Year(data["stats"]["start"])
+  params["tmp"]["factor"] = max(1, year(params["Settings"]["vacation deadline"]))
+  if data["stats"]["start"] > params["tmp"]["deadline"]
+    data["tmp"]["deadline"] = Date(year(data["stats"]["start"]),12,31)
+  end
   return
 end
