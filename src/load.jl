@@ -95,7 +95,7 @@ function load_offdays!(
       credit = params["Recover"]["vacation"] - off
       credit < 0 && @warn("not enough vacation left; reduce vacation by $(abs(credit)) days",
          _module=nothing, _group=nothing, _file=nothing, _line=nothing)
-      data[type][!, "remaining"] = Int[credit]
+      data[type].remaining = Int[credit]
     end
     # Save tmp data and return the new data section
     save_tmp!(data, params)
@@ -106,17 +106,19 @@ function load_offdays!(
       reason=String[type],
       start=Date[data["stats"]["start"]],
       stop=Date[data["stats"]["stop"]],
-      days=Int[0],
-      remaining=Int[params["Settings"]["vacation days"]],
+      days=Int[0]
     )
+    type == "vacation" && (data[type].remaining = Int[params["Settings"]["vacation days"]])
     # Save tmp data and return the new data section
     save_tmp!(data, params)
     return data[type]
   end
   # Read input file
   offdays = CSV.read(off, DataFrame, stringtype=String, stripwhitespace=true)
+  # Setup balance and deadline parameters
+  save_tmp!(data, params)
   # Process dates and convert to date format
-  start, stop, days, reason = Date[], Date[], Int[], String[]
+  start, stop, days, reason, remaining = Date[], Date[], Int[], String[], Int[]
   for i = 1:size(offdays, 1)
     # Split ranges into start and stop date
     current_date = strip.(split(offdays[i, 1], "-"))
@@ -131,6 +133,7 @@ function load_offdays!(
     push!(stop, stopdate)
     push!(reason, offdays[i, 2])
     push!(days, countbdays(params["tmp"]["calendar"], startdate, stopdate))
+    type == "vacation" && vacationaccout!(remaining, startdate, stopdate, params)
     if startdate ≤ data["stats"]["stop"] && stopdate > data["stats"]["stop"]
       # Correct stop date for later balance calculation,
       # if offday period partly overlaps with end of Kimai period
@@ -141,74 +144,54 @@ function load_offdays!(
   colname = names(offdays)[2]
   offdays = DataFrame(colname = reason; start, stop, days)
   df.rename!(offdays, [colname, "start", "stop", "days"])
+  type == "vacation" && (offdays.remaining = remaining)
   # Ensure, DataFrame is not empty
   isempty(offdays) && push!(offdays, (type, data["stats"]["start"], data["stats"]["stop"], 0))
   # Save data and add balance counter for vacation
   data[type] = offdays
-  type == "vacation" && add_vacationcounter!(data, params)
   return offdays
 end
 
 
 """
-    add_vacationcounter!(data::dict, params::dict)::Nothing
-
-Add a column `remaining` to the `vacation` DataFrame in `data` with the aid of
-`params`.
-"""
-function add_vacationcounter!(data::dict, params::dict)::Nothing
-
-  # Setup balance and deadline parameters
-  save_tmp!(data, params)
-
-  # Check and adjust balance
-  account = Int[]
-  for row in eachrow(data["vacation"])
-    adjust_balance!(account, row, params)
-  end
-  # Add balance to vacation data
-  data["vacation"][!, "remaining"] = account
-  return
-end
-
-
-"""
-    function adjust_balance!(
+    function vacationaccout!(
       account::Vector{Int},
-      vacation::df.DataFrameRow,
+      start::Date,
+      stop::Date,
       params::dict
     )::Nothing
-
 Add the balance with remaining vacation days to the `account` based on the previous
-balance and other parameters in `params` for the current `vacation`.
+balance and other parameters in `params` for the current vacation (defined by the
+`start` and `stop` day).
 """
-function adjust_balance!(
+function vacationaccout!(
   account::Vector{Int},
-  vacation::df.DataFrameRow,
+  start::Date,
+  stop::Date,
   params::dict
 )::Nothing
   # Add new vacation at the beginning of the new year
-  if vacation.stop > params["tmp"]["year"]
+  if stop > params["tmp"]["year"]
     # Check correct balance at the end of the year,
     # if vacation starts in old year and ends in new year
-    if vacation.start ≤ params["tmp"]["year"] &&
-      params["tmp"]["balance"] - countbdays(params["tmp"]["calendar"], vacation.start, params["tmp"]["year"]) < 0
+    if start ≤ params["tmp"]["year"] &&
+      params["tmp"]["balance"] - countbdays(params["tmp"]["calendar"], start, params["tmp"]["year"]) < 0
       @warn("too much vacation taken before end of year; check whether you are allowed to use next year's vacation",
          _module=nothing, _group=nothing, _file=nothing, _line=nothing)
     end
-    n = year(vacation.stop) - year(params["tmp"]["year"])
+    n = year(stop) - year(params["tmp"]["year"])
     params["tmp"]["year"] += Year(n)
     params["tmp"]["balance"] += n*params["Settings"]["vacation days"]
   end
   # Cap vacation at vacation deadline
-  if vacation.stop > params["tmp"]["deadline"]
+  if stop > params["tmp"]["deadline"]
     # Calculate unused vacation days and days in current vacation taken before the cap
     overhead = params["tmp"]["balance"] - params["tmp"]["factor"]*params["Settings"]["vacation days"]
     overlap = countbdays(params["tmp"]["calendar"],
-      vacation.start, params["tmp"]["deadline"])
-    # Cap the vacation days to maximum allowed number and print warning
+      start, params["tmp"]["deadline"])
+    # Cap athe vacation days to maximum allowed number and print warning
     params["tmp"]["balance"] = min(params["tmp"]["factor"]*params["Settings"]["vacation days"], params["tmp"]["balance"])
-    if vacation.start ≤ params["tmp"]["deadline"]
+    if start ≤ params["tmp"]["deadline"]
       # Correct for vacation days taken before the cap
       params["tmp"]["balance"] += max(min(overlap, overhead), 0)
       overhead -= overlap
@@ -221,11 +204,11 @@ function adjust_balance!(
     params["tmp"]["deadline"] += Year(1)
   end
   # Update balance for all vacation periods and save balance
-  params["tmp"]["balance"] -= vacation.days
+  params["tmp"]["balance"] -= countbdays(params["tmp"]["calendar"], start, stop)
   push!(account, params["tmp"]["balance"])
   # Warn, if too much vacation is used
   params["tmp"]["balance"] > 0 || @warn(string("not enough vacation left; reduce vacation from ",
-    vacation.start, " – ", vacation.stop, " and subsequent vacations this year"),
+    start, " – ", stop, " and subsequent vacations this year"),
      _module=nothing, _group=nothing, _file=nothing, _line=nothing)
   return
 end
