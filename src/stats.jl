@@ -1,4 +1,5 @@
-# Conversion of time units
+## helper functions to process times/periods and calculate balances
+## Conversion of time units
 
 """ Convert hours to milliseconds """
 htoms(h::Real) = 3_600_000h
@@ -8,7 +9,7 @@ htoms(h::Real) = 3_600_000h
 mstoday(ms::Real)::Int = round(Int, ms/86_400_000, RoundNearestTiesUp)
 
 
-# Calculate balances; helper functions to process times/periods
+## Calculate balances
 
 """
     arm(params::dict, restrict::Bool=true)::dict

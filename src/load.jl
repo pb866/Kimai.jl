@@ -1,4 +1,4 @@
-# Load data from input files
+## Load data from input files
 
 """
     load(params::dict)::dict
@@ -171,16 +171,16 @@ function vacationaccout!(
   params::dict
 )::Nothing
   # Add new vacation at the beginning of the new year
-  if stop > params["tmp"]["year"]
+  if stop > Date(params["tmp"]["year"], 12, 31)
     # Check correct balance at the end of the year,
     # if vacation starts in old year and ends in new year
-    if start ≤ params["tmp"]["year"] &&
-      params["tmp"]["balance"] - countbdays(params["tmp"]["calendar"], start, params["tmp"]["year"]) < 0
+    if start ≤ Date(params["tmp"]["year"], 12, 31) &&
+      params["tmp"]["balance"] - countbdays(params["tmp"]["calendar"], start, Date(params["tmp"]["year"], 12, 31)) < 0
       @warn("too much vacation taken before end of year; check whether you are allowed to use next year's vacation",
          _module=nothing, _group=nothing, _file=nothing, _line=nothing)
     end
-    n = year(stop) - year(params["tmp"]["year"])
-    params["tmp"]["year"] += Year(n)
+    n = year(stop) - params["tmp"]["year"]
+    params["tmp"]["year"] += n
     params["tmp"]["balance"] += n*params["Settings"]["vacation days"]
   end
   # Cap vacation at vacation deadline
@@ -189,7 +189,7 @@ function vacationaccout!(
     overhead = params["tmp"]["balance"] - params["tmp"]["factor"]*params["Settings"]["vacation days"]
     overlap = countbdays(params["tmp"]["calendar"],
       start, params["tmp"]["deadline"])
-    # Cap athe vacation days to maximum allowed number and print warning
+    # Cap the vacation days to maximum allowed number and print warning
     params["tmp"]["balance"] = min(params["tmp"]["factor"]*params["Settings"]["vacation days"], params["tmp"]["balance"])
     if start ≤ params["tmp"]["deadline"]
       # Correct for vacation days taken before the cap
@@ -249,7 +249,7 @@ Save parameters calculated from `params` and `data` to a `"tmp"` section in `dat
 """
 function save_tmp!(data::dict, params::dict)::Nothing
   params["tmp"]["balance"] = params["Recover"]["vacation"]
-  params["tmp"]["year"] = Date(year(data["stats"]["start"]), 12, 31)
+  params["tmp"]["year"] = year(data["stats"]["start"])
   params["tmp"]["deadline"] = params["Settings"]["vacation deadline"] + Year(data["stats"]["start"])
   params["tmp"]["factor"] = max(1, year(params["Settings"]["vacation deadline"]))
   if data["stats"]["start"] > params["tmp"]["deadline"]

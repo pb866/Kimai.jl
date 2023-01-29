@@ -1,6 +1,6 @@
 ## Get general settings and previous balances from config.yaml and store in dict
 
-# Overload base function to check for empty symbols
+## Overload base function to check for empty symbols
 """ Check for empty Symbol (Symbol("")) """
 Base.isempty(s::Symbol) = s == Symbol("") ? true : false
 
@@ -131,6 +131,7 @@ function configure(
   if params["Settings"]["vacation deadline"] < Date(0,12,31)
     params["Settings"]["vacation deadline"] = Date(0,12,31)
   end
+  @debug "Reset vacation at" params["Settings"]["vacation deadline"]
 
   ## Recover last session
   recover_session!(params, recover)
@@ -147,7 +148,7 @@ function configure(
 end
 
 
-# Helper functions to validate input
+## Helper functions to validate input
 
 """
     function check_dictentry!(
@@ -295,7 +296,7 @@ function normfiles(file::AbstractString, dir::AbstractString; mandatory=false, a
 end
 
 
-# Helper function to recover balances from previous sessions
+## Helper function to recover balances from previous sessions
 
 """
     recover_session!(params, recover)::Nothing
@@ -396,7 +397,7 @@ function last_balance!(data, kwargs)::Nothing
 end
 
 
-# Helper functions to set up logging events
+## Helper functions to set up logging events
 
 """
     set_logger(level::String="Info")::Logging.ConsoleLogger
