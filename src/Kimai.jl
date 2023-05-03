@@ -1,5 +1,6 @@
 module Kimai
 
+## Import packages
 using Dates
 import Logging
 import OrderedCollections.OrderedDict as dict
@@ -9,10 +10,10 @@ import CSV
 import DataFrames as df
 import DataFrames: DataFrame
 
-# Ensure sessions folder
+#* Ensure sessions folder
 sessions = normpath(@__DIR__, "../sessions/")
 isdir(sessions) || mkdir(sessions)
-# Load source files
+## Load source files
 include("config.jl")
 include("load.jl")
 include("stats.jl")

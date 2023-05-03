@@ -78,7 +78,7 @@ function configure(
   recover::Union{Bool,Symbol}=true,
   kwargs...
 )::dict
-  ## Read config file
+  #* Read config file
   params = isempty(config) ? dict() : try
     yml.load_file(config, dicttype=dict)
   catch
@@ -87,7 +87,7 @@ function configure(
     dict()
   end
 
-  ## Setup logging
+  #* Setup logging
   # Ensure Log section exists in params
   haskey(params, "Log") || (params["Log"] = dict())
   # Check and set the minimum log level
@@ -97,7 +97,7 @@ function configure(
   define_warn_levels(params["Log"], "low vacation", kwargs, [5, -1])
   define_warn_levels(params["Log"], "unused vacation", kwargs, [60, 20])
 
-  ## Datasets and sources
+  #* Datasets and sources
   # Ensure Datasets section exists in params
   haskey(params, "Datasets") || (params["Datasets"] = dict())
   # Fill dict
@@ -112,7 +112,7 @@ function configure(
   params["Datasets"]["sickdays"] isa Int ||
     (params["Datasets"]["sickdays"] = normfiles(params["Datasets"]["sickdays"], params["Datasets"]["dir"]))
 
-  ## General settings
+  #* General settings
   # Ensure, Settings section exists in params
   haskey(params, "Settings") || (params["Settings"] = dict())
   # Fill dict
@@ -133,7 +133,7 @@ function configure(
   end
   @debug "Reset vacation at" params["Settings"]["vacation deadline"]
 
-  ## Recover last session
+  #* Recover last session
   recover_session!(params, recover)
   check_dictentry!(params, "Recover", "log ended", kwargs, DateTime, DateTime(-9999))
   last_balance!(params["Recover"], kwargs)

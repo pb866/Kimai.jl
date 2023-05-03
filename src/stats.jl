@@ -6,24 +6,20 @@ htoms(h::Real) = 3_600_000h
 
 
 """ Convert ms to days """
-mstoday(ms::Real)::Int = round(Int, ms/86_400_000, RoundNearestTiesUp)
+mstoday(ms::Real, rounding_mode::RoundingMode=RoundNearestTiesUp)::Int = round(Int, ms/86_400_000, rounding_mode)
 
 
 ## Calculate balances
 
 """
-    arm(params::dict, restrict::Bool=true)::dict
+    arm!(params::dict, restrict::Bool=true)::dict
 
 Load time logs from the files defined in `params` and return a dictionary with
 entries for `"kimai"` `"vacation"`, and `"sickdays"` data together with `"stats"`
 about work- and off-days and balances.
-
-By default, only vacation and sick days within the Kimai period are considered.
-If `restrict` is set to `false`, all vacation and sick days defined in the respective
-files are counted.
 """
-function arm(params::dict, restrict::Bool=true)::dict
-  data = load(params)
+function arm!(params::dict)::dict
+  data = load!(params)
   calculate!(data, params)
   return data
 end
@@ -44,16 +40,18 @@ function calculate!(data::dict, params::dict)::dict
     Date(data["stats"]["start"]), Date(data["stats"]["stop"]))
   target = countbdays(params["tmp"]["calendar"], Date(data["stats"]["start"]), Date(data["stats"]["stop"]))
   holidays = countholidays(params["tmp"]["calendar"], Date(data["stats"]["start"]), Date(data["stats"]["stop"]))
-  rows = findall(≤(data["stats"]["stop"]), data["vacation"].stop)
+  rows = findall(≤(Date(data["stats"]["stop"])), data["vacation"].stop)
+  @debug "rows" Date(data["stats"]["stop"]) data["vacation"].stop rows
   current_vacation = @view data["vacation"][rows, :]
+  @debug "vacation" data["vacation"]
   vacation = sum(current_vacation.days)
-  rows = findall(≤(data["stats"]["stop"]), data["sickdays"].stop)
+  rows = findall(≤(Date(data["stats"]["stop"])), data["sickdays"].stop)
   current_sickdays = @view data["sickdays"][rows, :]
   sickdays = sum(current_sickdays.days)
   weekends = total - target - holidays
   # Calculate workload and balance and add stats entry to data
   workdays = target - vacation - sickdays
-  workload = daystoworkms(Day(workdays), params)
+  workload = daystoworkms(Day(workdays), params) + Dates.toms(Hour(params["tmp"]["Xmas balance"]))
   balance = Dates.toms(sum(data["kimai"].time)) - workload + params["Recover"]["balance"]
   merge!(data["stats"], dict(
     "total days" => total,
@@ -66,6 +64,45 @@ function calculate!(data::dict, params::dict)::dict
     "workload" => workload,
     "balance" => balance # + params["Recover"]["balance"] here or during show
   ))
+  # Correct for Xmas rule, if option is selected
+  applyXmasrule!(data["stats"], params)
+end
+
+
+function applyXmasrule!(stats::dict, params::dict)::dict
+  # Count Xmas and New Year's Eve days in current time span
+  timespan = Date(stats["start"]):Day(1):Date(stats["stop"])
+  Xmas = count([Date(year,12,24) ∈ timespan && cal.isbday(params["tmp"]["calendar"], Date(2024,12,24)) for year in year(stats["start"]):year(stats["stop"])])
+  NYE = count([Date(year,12,31) ∈ timespan && cal.isbday(params["tmp"]["calendar"], Date(2024,12,31)) for year in year(stats["start"]):year(stats["stop"])])
+
+  # Define correction factors for full days (in days) and half days (in ms)
+  Xhalf, Xfull = modf((Xmas + NYE)/2)
+  Xhalf *= htoms(params["Settings"]["workload"]/params["Settings"]["workdays"])
+  @debug "Xmas rule" Xhalf  Xfull
+  begin
+    println("original stats")
+    for key in stats.keys
+      println(key, " = ", stats[key])
+    end
+  end
+
+  # Correct stats
+  stats["target days"] -= 1
+  stats["workdays"] -= 1
+  stats["holidays"] += 1
+  stats["workload"] -= (daystoworkms(Day(Xfull), params) + Xhalf)
+  stats["balance"] += (daystoworkms(Day(Xfull), params) + Xhalf)
+  # Save flag, if period contains half day
+  params["tmp"]["Xhalf"] = Bool(mstoday(Xhalf, RoundUp))
+  @debug begin
+    println("corrected stats")
+    for key in stats.keys
+      println(key, " = ", stats[key])
+    end
+  end
+
+  # Return corrected stats (in addition to in-place corrections)
+  return stats
 end
 
 
