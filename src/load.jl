@@ -10,17 +10,20 @@ function load!(params::dict)::dict
   # Initialise dict
   data = dict()
   # Load Kimai times
-  data["kimai"] = load_kimai(params)
+  load_kimai!(data, params)
   # Set current Kimai period for restriction
   data["stats"] = dict{String,Any}(
     "start" => data["kimai"].in[end],
     "stop" => data["kimai"].out[1]
   )
   @debug "init stop date" data["stats"]["stop"]
+  # Instantiate calendars for leave days
+  vacation = Vacation()
+
   # Load off-days
-  load_offdays!(data, params, "vacation")
+  load_abscence!(data, params, "vacation")
+  load_abscence!(data, params, "sickdays")
   @debug "refined stop date" data["stats"]["stop"]
-  load_offdays!(data, params, "sickdays")
   # Check vacation, issue warnings for low credit/unused vacation
   check_vacationcredit(data, params)
   # Return Kimai data
@@ -29,11 +32,11 @@ end
 
 
 """
-    load_kimai(params::dict)::DataFrame
+    load_kimai!(data::dict, params::dict)::Nothing
 
 Load input data from files defined by `params["Datasets"]` and return as `DataFrame`.
 """
-function load_kimai(params::dict)::DataFrame
+function load_kimai!(data::dict, params::dict)::Nothing
   # Read Kimai history
   kimai = CSV.read(params["Datasets"]["kimai"], DataFrame, select=collect(1:5), stringtype=String)
   df.rename!(kimai, ["date", "in", "out", "time", "hours"])
@@ -62,48 +65,31 @@ function load_kimai(params::dict)::DataFrame
   # Reduce data to current session
   i = findfirst(kimai.out .≤ params["Recover"]["log ended"])
   isnothing(i) || deleteat!(kimai, i:size(kimai, 1))
-  # Return kimai dataframe
-  return kimai
+  # Save data and return
+  data["kimai"] = kimai
+  return
 end
 
 
 """
-    function load_offdays!(
+    load_abscence!(
       data::dict,
       params::dict,
       type::String
-    )::DataFrame
+    )::Nothing
 
 Load the `type` of offdays from the `"Datasets"` in `params` to a `DataFrame`,
 add an entry `type` to `data`, and return the `DataFrame`.
 """
-function load_offdays!(
+function load_abscence!(
   data::dict,
   params::dict,
   type::String
-)::DataFrame
+)::Nothing
   # Get current off-day type
-  off = params["Datasets"][type]
-  @debug "off-day source" type off
-  if off isa Int
-    # Return DataFrame with given value for current Kimai range, check enough vacation is available
-    off == 0 && @info "$type not specified, use Int or data file to set $type"
-    data[type] =  DataFrame(
-      reason=String[type],
-      start=Date[data["stats"]["start"]],
-      stop=Date[data["stats"]["stop"]],
-      days=Int[off],
-    )
-    if type == "vacation"
-      credit = params["Recover"]["vacation"] - off
-      credit < 0 && @warn("not enough vacation left; reduce vacation by $(abs(credit)) days",
-         _module=nothing, _group=nothing, _file=nothing, _line=nothing)
-      data[type].remaining = Int[credit]
-      save_tmp!(data, params)
-    end
-    # Save tmp data and return the new data section
-    return data[type]
-  elseif isempty(off)
+  abscence = params["Datasets"][type]
+  @debug "off-day source" type abscence
+  if isempty(abscence)
     # Return empty DataFrame with default columns for non-existing files
     data[type] =  DataFrame(
       reason=String[type],
@@ -115,11 +101,10 @@ function load_offdays!(
       data[type].remaining = Int[params["Settings"]["vacation days"]]
       save_tmp!(data, params)
     end
-    # Save tmp data and return the new data section
-    return data[type]
+    return
   end
   # Read input file
-  offdays = CSV.read(off, DataFrame, stringtype=String, stripwhitespace=true)
+  offdays = CSV.read(abscence, DataFrame, stringtype=String, stripwhitespace=true)
   # Setup balance and deadline parameters for vacation
   type == "vacation" && save_tmp!(data, params)
   # Process dates and convert to date format
@@ -159,12 +144,12 @@ function load_offdays!(
   end
   # Save data and add balance counter for vacation
   data[type] = offdays
-  return offdays
+  return
 end
 
 
 """
-    function vacationaccout!(
+    vacationaccout!(
       remaining::Vector{Int},
       start::Date,
       stop::Date,

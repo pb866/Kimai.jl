@@ -5,7 +5,8 @@
 Base.isempty(s::Symbol) = s == Symbol("") ? true : false
 
 
-# Configure Kimai session
+## Configure Kimai session
+
 """
     configure(
       config::String="";
@@ -91,7 +92,7 @@ function configure(
   # Ensure Log section exists in params
   haskey(params, "Log") || (params["Log"] = dict())
   # Check and set the minimum log level
-  check_dictentry!(params, "Log", "loglevel", kwargs, String, "Info")
+  check_dictentry!(params, "Log", "loglevel", "Info", String, kwargs)
   set_logger(params["Log"]["loglevel"])
   # Validate threshold vor low and unused vacation
   define_warn_levels(params["Log"], "low vacation", kwargs, [5, -1])
@@ -101,29 +102,27 @@ function configure(
   # Ensure Datasets section exists in params
   haskey(params, "Datasets") || (params["Datasets"] = dict())
   # Fill dict
-  check_dictentry!(params, "Datasets", "dir", kwargs, String, ".")
-  check_dictentry!(params, "Datasets", "kimai", kwargs, String, "export.csv")
-  check_dictentry!(params, "Datasets", "vacation", kwargs, Union{Int,String}, 0)
-  check_dictentry!(params, "Datasets", "sickdays", kwargs, Union{Int,String}, 0)
+  check_dictentry!(params, "Datasets", "dir", ".", String, kwargs)
+  check_dictentry!(params, "Datasets", "kimai", "export.csv", String, kwargs)
+  check_dictentry!(params, "Datasets", "vacation", "vacation.csv", String, kwargs)
+  check_dictentry!(params, "Datasets", "sickdays", "sickdays.csv", String, kwargs)
   # Check files and standardise dict entries
   params["Datasets"]["kimai"] = normfiles(params["Datasets"]["kimai"], params["Datasets"]["dir"], mandatory=true)
-  params["Datasets"]["vacation"] isa Int ||
-    (params["Datasets"]["vacation"] = normfiles(params["Datasets"]["vacation"], params["Datasets"]["dir"]))
-  params["Datasets"]["sickdays"] isa Int ||
-    (params["Datasets"]["sickdays"] = normfiles(params["Datasets"]["sickdays"], params["Datasets"]["dir"]))
+  params["Datasets"]["vacation"] = normfiles(params["Datasets"]["vacation"], params["Datasets"]["dir"])
+  params["Datasets"]["sickdays"] = normfiles(params["Datasets"]["sickdays"], params["Datasets"]["dir"])
 
   #* General settings
   # Ensure, Settings section exists in params
   haskey(params, "Settings") || (params["Settings"] = dict())
   # Fill dict
-  check_dictentry!(params, "Settings", "state", kwargs, String, "SN")
-  check_dictentry!(params, "Settings", "workload", kwargs, Real, 40)
-  check_dictentry!(params, "Settings", "workdays", kwargs, Int, 5)
-  check_dictentry!(params, "Settings", "vacation days", kwargs, Int, 30)
-  check_dictentry!(params, "Settings", "vacation deadline", kwargs, Union{String, Date}, Date(0001, 03, 31))
+  check_dictentry!(params, "Settings", "state", "SN", String, kwargs)
+  check_dictentry!(params, "Settings", "workload", 40, Real, kwargs)
+  check_dictentry!(params, "Settings", "workdays", 5, Int, kwargs)
+  check_dictentry!(params, "Settings", "vacation days", 30, Int, kwargs)
+  check_dictentry!(params, "Settings", "vacation deadline", Date(0001, 03, 31), Union{String, Date}, kwargs)
   default = year(unix2datetime(mtime(params["Datasets"]["kimai"])))
   default == 1970 && (default = year(today()))
-  check_dictentry!(params, "Settings", "final year", kwargs, Int, default)
+  check_dictentry!(params, "Settings", "final year", default, Int, kwargs)
   # Validate/update calendar entries
   params["tmp"] = dict{String,Any}(
     "calendar" => cal.DE(Symbol(params["Settings"]["state"]))
@@ -135,10 +134,11 @@ function configure(
 
   #* Recover last session
   recover_session!(params, recover)
-  check_dictentry!(params, "Recover", "log ended", kwargs, DateTime, DateTime(-9999))
+  check_dictentry!(params, "Recover", "log ended", DateTime(-9999), DateTime, kwargs)
   last_balance!(params["Recover"], kwargs)
-  check_dictentry!(params, "Recover", "vacation", kwargs, Int, params["Settings"]["vacation days"], section_in_kw=true)
-  check_dictentry!(params, "Recover", "sickdays", kwargs, Int, 0, section_in_kw=true)
+  check_dictentry!(params, "Recover", "vacation", params["Settings"]["vacation days"],
+    Int, kwargs, section_in_kw=true)
+  check_dictentry!(params, "Recover", "sickdays", 0, Int, kwargs, section_in_kw=true)
   # Correct previous balance with kwargs/check user input
   correct_dates!(params["Recover"], "balance", kwargs)
   correct_dates!(params["Recover"], "vacation", kwargs)
@@ -151,13 +151,13 @@ end
 ## Helper functions to validate input
 
 """
-    function check_dictentry!(
+    check_dictentry!(
       collection::dict,
       section::String,
       entry::String,
-      kwargs,
+      default,
       type,
-      default;
+      kwargs;
       section_in_kw::Bool=false,
       kw::Symbol=Symbol("")
     )::Nothing
@@ -176,9 +176,9 @@ function check_dictentry!(
   collection::dict,
   section::String,
   entry::String,
-  kwargs,
+  default,
   type,
-  default;
+  kwargs;
   section_in_kw::Bool=false,
   kw::Symbol=Symbol("")
 )::Nothing
@@ -214,7 +214,7 @@ end
 
 
 """
-    function checktype(
+    checktype(
       container,
       entry::Union{String,Symbol},
       type::Type,
