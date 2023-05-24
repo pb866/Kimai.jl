@@ -139,6 +139,7 @@ function configure(
   check_dictentry!(params, "Recover", "vacation", params["Settings"]["vacation days"],
     Int, kwargs, section_in_kw=true)
   check_dictentry!(params, "Recover", "sickdays", 0, Int, kwargs, section_in_kw=true)
+  check_dictentry!(params, "Recover", "halfday", false, Bool, kwargs)
   # Correct previous balance with kwargs/check user input
   correct_dates!(params["Recover"], "balance", kwargs)
   correct_dates!(params["Recover"], "vacation", kwargs)

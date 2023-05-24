@@ -51,7 +51,7 @@ function calculate!(data::dict, params::dict)::dict
   weekends = total - target - holidays
   # Calculate workload and balance and add stats entry to data
   workdays = target - vacation - sickdays
-  workload = daystoworkms(Day(workdays), params) + Dates.toms(Hour(params["tmp"]["Xmas balance"]))
+  workload = daystoworkms(Day(workdays), params) # fix + Dates.toms(Hour(params["tmp"]["Xmas balance"]))
   balance = Dates.toms(sum(data["kimai"].time)) - workload + params["Recover"]["balance"]
   merge!(data["stats"], dict(
     "total days" => total,
@@ -93,7 +93,8 @@ function applyXmasrule!(stats::dict, params::dict)::dict
   stats["workload"] -= (daystoworkms(Day(Xfull), params) + Xhalf)
   stats["balance"] += (daystoworkms(Day(Xfull), params) + Xhalf)
   # Save flag, if period contains half day
-  params["tmp"]["Xhalf"] = Bool(mstoday(Xhalf, RoundUp))
+  # ℹ Only half vacation days need to be saved across sessions
+  # params["tmp"]["Xhalf"] = Bool(mstoday(Xhalf, RoundUp))
   @debug begin
     println("corrected stats")
     for key in stats.keys
@@ -144,6 +145,8 @@ function daystoworkms(days::Day, params::dict)::Real
 end
 
 
+# Define custom functions to analyse workdays excluding leave days and half days
+
 """
     countbdays(calendar::cal.HolidayCalendar, start::Date, stop::Date)::Int
 
@@ -166,3 +169,99 @@ the `start` date is later than the `stop` date.
 function countholidays(calendar::cal.HolidayCalendar, start::Date, stop::Date)::Int
   start > stop ? 0 : length(cal.listholidays(calendar, start, stop))
 end
+
+
+function countholidays!(params::dict, type::String, start::Date, stop::Date)::Int
+  # Checks
+  start ≤ stop || return 0
+  ok = check_params(params, type)
+  # Calculate holidays form BusinessDays package
+  holidays = cal.listholidays(params["tmp"][type]["calendar"], start, stop)
+  if ok && params["Settings"]["Xmas rule"]
+    halfdays = cal.listholidays(params["tmp"]["halfdays"], start, stop)
+    length(setdiff(holidays, cal.listholidays(params["tmp"]["halfdays"], start, stop)))
+  else
+    length(holidays)
+  end
+end
+
+
+function check_params(params::dict, type::String)::Bool
+  ok = haskey(params, "Settings") && haskey(params["Settings"], "Xmas rule") &&
+    haskey(params, "tmp") && haskey(params["tmp"], type) && haskey(params["tmp"][type], "calendar") &&
+    haskey(params, "tmp") && haskey(params["tmp"], "halfdays") &&
+    haskey(params, "Recover") && haskey(params["Recover"], "halfday")
+  if !ok
+    @warn "params not correctly set; run function `configure` and `load!`" # _module=nothing _group=nothing _file=nothing _line=nothing
+    # TODO Set tmp fields only in configure.
+  end
+  return ok
+end
+
+
+function isworkday(d::Date, params::dict)::Bool
+  cal.isbday(params["tmp"]["calendar"], d) && !cal.isholiday(params["tmp"]["vacation"]["calendar"], d) &&
+    !cal.isholiday(params["tmp"]["sickdays"]["calendar"], d) && !cal.isholiday(params["tmp"]["halfdays"], d)
+end
+
+
+function listworkdays(
+  params::dict,
+  startdate::Date,
+  stopdate::Date,
+  ignoretype::String...=""
+)::Vector{Date}
+  # try–catch > configure/load first
+  # Todo redefine for struct Kimai as public function, otherwise use _listworkdays
+  # Get all business days in period
+  @debug "ignore" ignoretype
+  days = cal.listbdays(params["tmp"]["calendar"], startdate, stopdate)
+  @debug "business days" days
+  # Substract sick- and vacation days
+  if "sickdays" ∉ ignoretype
+    setdiff!(days, cal.listholidays(params["tmp"]["sickdays"]["calendar"], startdate, stopdate))
+    @debug "without sick leave" days cal.listholidays(params["tmp"]["sickdays"]["calendar"], startdate, stopdate)
+  end
+  if "vacation" ∉ ignoretype
+    setdiff!(days, cal.listholidays(params["tmp"]["vacation"]["calendar"], startdate, stopdate))
+    @debug "without vacation" days cal.listholidays(params["tmp"]["vacation"]["calendar"], startdate, stopdate)
+  end
+  # ℹ Don't consider Halfdays in stats, use only for balance
+  # if params["Settings"]["Xmas rule"]
+  #   workdays = setdiff(workdays, cal.listholidays(params["tmp"]["halfdays"], startdate, stopdate))
+  # end
+  return days
+end
+
+#=
+# ¡ Not yet working !
+
+ignoretype = ("vacation",)
+
+# function countworkdays(
+  params::dict,
+  start::Date,
+  stop::Date,
+  ignoretype::String...="";
+  ignore_Xmas_rule::Bool=false
+)::Union{Int,Float16}
+  start > stop && return 0
+  days = length(listworkdays(params, start, stop, ignoretype...))
+  if params["Settings"]["Xmas rule"] && !ignore_Xmas_rule
+    days -= Float16(countholidays(params["tmp"]["halfdays"], start, stop)/2)
+  end
+  return days
+end
+
+params["Settings"]["Xmas rule"] = true
+countworkdays(params, Date(2023,12,25), Date(2024))
+
+cal.isholiday(params["tmp"]["sickdays"]["calendar"], Date(2024, 12, 24))
+println(Date(2024, 12, 24) in params["tmp"]["sickdays"]["dates"])
+
+
+s = Set{Date}()
+struct CustomCalendar <: cal.HolidayCalendar end
+
+cal.isholiday(CustomCalendar(), d::Date) = s
+=#

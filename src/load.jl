@@ -17,15 +17,17 @@ function load!(params::dict)::dict
     "stop" => data["kimai"].out[1]
   )
   @debug "init stop date" data["stats"]["stop"]
-  # Instantiate calendars for leave days
-  vacation = Vacation()
 
-  # Load off-days
-  load_abscence!(data, params, "vacation")
+  # Initialise data sets and calendars for leave days
+  params["tmp"]["vacation"] = dict("calendar" => Vacation(), "dates" => Set())
+  params["tmp"]["sickdays"] = dict("calendar" => SickLeave(), "dates" => Set())
+  params["tmp"]["halfdays"] = HalfDay()
+  # Load leave days
   load_abscence!(data, params, "sickdays")
+  load_abscence!(data, params, "vacation")
   @debug "refined stop date" data["stats"]["stop"]
   # Check vacation, issue warnings for low credit/unused vacation
-  check_vacationcredit(data, params)
+  # TODO check_vacationcredit(data, params)
   # Return Kimai data
   return data
 end
@@ -86,9 +88,12 @@ function load_abscence!(
   params::dict,
   type::String
 )::Nothing
+# Check: empty file
+# Check: missing file
+  ## Argument checks/setup
   # Get current off-day type
   abscence = params["Datasets"][type]
-  @debug "off-day source" type abscence
+  @debug "abscence source" type abscence
   if isempty(abscence)
     # Return empty DataFrame with default columns for non-existing files
     data[type] =  DataFrame(
@@ -97,58 +102,97 @@ function load_abscence!(
       stop=Date[data["stats"]["stop"]],
       days=Int[0]
     )
+    #=
+    # Solution > moved to separate function after loading general data
     if type == "vacation"
       data[type].remaining = Int[params["Settings"]["vacation days"]]
       save_tmp!(data, params)
     end
+    =#
     return
   end
+  ## Data processing
   # Read input file
-  offdays = CSV.read(abscence, DataFrame, stringtype=String, stripwhitespace=true)
+  leave = CSV.read(abscence, DataFrame, stringtype=String, stripwhitespace=true)
   # Setup balance and deadline parameters for vacation
-  type == "vacation" && save_tmp!(data, params)
+  # Fix move to new function
+  # type == "vacation" && save_tmp!(data, params)
   # Process dates and convert to date format
-  start, stop, days, reason, remaining = Date[], Date[], Int[], String[], Int[]
-  for i = 1:size(offdays, 1)
+  start, stop, days, reason = Date[], Date[], Int[], String[]
+  # Solution > remaining = Int[] moved to new function
+  for i = 1:size(leave, 1)
     # Split ranges into start and stop date
-    current_date = strip.(split(offdays[i, 1], "-"))
+    current_date = strip.(split(leave[i, 1], "-"))
     # Process dates, use same stop date as start date for single date
     startdate = Date(current_date[1], dateformat"d.m.y")
     stopdate = length(current_date) == 1 ? startdate : Date(current_date[2], dateformat"d.m.y")
     # Ignore past dates
     startdate > data["stats"]["start"] || continue
-    # Save dates of complete of period, reason, and the number of offdays
-    # Offday count at the edges is restricted to within start and stop date
+    # Save dates of complete period, reason, and the number of leave days
+    # Leave day count at the edges is restricted to within start and stop date
     push!(start, startdate)
     push!(stop, stopdate)
-    push!(reason, offdays[i, 2])
-    offdaycounter!(days, remaining, startdate, stopdate, type, data, params)
+    push!(reason, leave[i, 2])
+    push!(days, count_leavedays(params, startdate, stopdate, type))
     if startdate ≤ data["stats"]["stop"] && stopdate > data["stats"]["stop"]
       # Correct stop date for later balance calculation,
       # if off-day period partly overlaps with end of Kimai period
       data["stats"]["stop"] = DateTime(stopdate, Time(23,59,59))
     end
   end
-  # Add offdays to dataset
-  @debug "offdays" length(reason) length(start) length(stop) length(days) length(remaining) type
-  colname = names(offdays)[2]
-  offdays = DataFrame(colname = reason; start, stop, days)
-  df.rename!(offdays, [colname, "start", "stop", "days"])
-  # Ensure, DataFrame i  @debug type data["stats"]["start"] data["stats"]["stop"] offdays
-  nodata = isempty(offdays)
-  nodata && push!(offdays, (type, data["stats"]["start"], data["stats"]["stop"], 0))
+
+  # Add leave days to dataset
+  @debug "leave" length(reason) length(start) length(stop) length(days) type # fix remove length(remaining), if remaining is calculated in new function
+  colname = names(leave)[2]
+  leave = DataFrame(;reason, start, stop, days)
+  df.rename!(leave, [colname, "start", "stop", "days"])
+  # Ensure, DataFrame is not empty
+  nodata = isempty(leave)
+  nodata && push!(leave, (type, data["stats"]["start"], data["stats"]["stop"], 0))
   # Add remaining vacation days
+  #=
+  # Solution: moved to new function
   if type == "vacation"
-    @debug "vacation" [params["Settings"]["vacation days"]] offdays
-    offdays.remaining = nodata ? [params["Settings"]["vacation days"]] : remaining
+    @debug "vacation" [params["Settings"]["vacation days"]] leave
+    leave.remaining = nodata ? [params["Settings"]["vacation days"]] : remaining
   end
+  =#
   # Save data and add balance counter for vacation
-  data[type] = offdays
+  data[type] = leave
   return
 end
 
 
 """
+    count_leavedays(params::dict, start::Date, stop::Date, type::String)::Int
+
+Count the number of leave days of given `type` between `start` and `stop`.
+Save the dates in `params` and return number of leave days as Int.
+
+If the Xmas rule is applied and an odd number of half-days exists in the vacation period,
+leave is rounded up to full days, unless a left-over half-day from previous vacations
+exists. In this case, leave is rounded down to the next smaller number (as the existing
+half-day would be considered for this leave period).
+"""
+function count_leavedays(params::dict, start::Date, stop::Date, type::String)::Int
+  # Set leave of given `type` in temporary calendar and save number of leave days
+  leave = listworkdays(params, start, stop, type)
+  union!(params["tmp"][type]["dates"], leave)
+  days = length(leave)
+  # Optionally apply Xmas rule to annual leave
+  if type == "vacation" && params["Settings"]["Xmas rule"]
+    # Get number of halfdays, use remainder for uneven days to reduce current vacation, if uneven
+    halfdays = length(intersect(cal.listholidays(params["tmp"]["halfdays"], start, stop), leave))/2 -
+      0.5params["Recover"]["halfday"]
+    # Correct number of leave days
+    days -= round(halfdays, RoundDown)
+  end
+  return days
+end
+
+
+"""
+# ¡obsolete! #
     vacationaccout!(
       remaining::Vector{Int},
       start::Date,
@@ -168,13 +212,13 @@ function offdaycounter!(
   data::dict,
   params::dict
 )::Nothing
-  #* Add offdays and return for non-vacation types
+  # DONE Add offdays and return for non-vacation types
   offdays = countbdays(params["tmp"]["calendar"], start, stop)
   if type != "vacation"
     push!(days, offdays)
     return
   end
-  #* Apply X-mas rule
+  # DONE Apply X-mas rule
   Xmas, NYE = Date(params["tmp"]["year"], 12, 24), Date(params["tmp"]["year"], 12, 31)
   vacation = start:Day(1):stop
   if params["Settings"]["Xmas rule"] && Xmas in vacation && cal.isbday(params["tmp"]["calendar"], Xmas)
@@ -189,7 +233,7 @@ function offdaycounter!(
     # Adjust work load balance for New Year's Eve
     params["tmp"]["Xfactor"] -= 1
   end
-  #* Add new vacation at the beginning of the new year
+  # TODO Add new vacation at the beginning of the new year
   if stop > NYE
     # Check correct balance at the end of the year,
     # if vacation starts in old year and ends in new year
@@ -214,7 +258,7 @@ function offdaycounter!(
     # Reset Xfactor for work balance corrections to next year
     params["tmp"]["Xfactor"] = 2
   end
-  #* Cap vacation at vacation deadline
+  # TODO Cap vacation at vacation deadline
   if stop > params["tmp"]["deadline"]
     # Calculate unused vacation days and days in current vacation taken before the cap
     overhead = params["tmp"]["balance"] - params["tmp"]["factor"]*params["Settings"]["vacation days"]
@@ -233,7 +277,7 @@ function offdaycounter!(
     # Update deadline to next year
     params["tmp"]["deadline"] += Year(1)
   end
-  #* Update balances for current vacation period
+  # TODO Update balances for current vacation period
   params["tmp"]["balance"] -= offdays
   push!(days, offdays)
   push!(remaining, params["tmp"]["balance"])
@@ -251,6 +295,7 @@ end
 
 Issue infos or warnings about low or expiring vacation stored in `data` using
 thresholds defined in `params`.
+# fix > Rename to vacation_credit! or set_vacationcredit
 """
 function check_vacationcredit(data::dict, params::dict)::Nothing
   @debug "vacation credit" params["tmp"]
@@ -278,6 +323,7 @@ end
     save_tmp!(data::dict, params::dict)::Nothing
 
 Save parameters calculated from `params` and `data` to a `"tmp"` section in `data`.
+#¿Still needed?#
 """
 function save_tmp!(data::dict, params::dict)::Nothing
   # Current year
@@ -285,13 +331,14 @@ function save_tmp!(data::dict, params::dict)::Nothing
   # Parameters for vacation days
   params["tmp"]["balance"] = params["Recover"]["vacation"]
   params["tmp"]["deadline"] = params["Settings"]["vacation deadline"] + Year(data["stats"]["start"])
-  params["tmp"]["factor"] = max(1, year(params["Settings"]["vacation deadline"]))
+  # params["tmp"]["factor"] = max(1, year(params["Settings"]["vacation deadline"]))
+  # ¿Set elsewhere?
   if data["stats"]["start"] > params["tmp"]["deadline"]
     data["tmp"]["deadline"] = Date(year(data["stats"]["start"]),12,31)
   end
   # Parameters for X-mas/New Year's corrections
-  params["tmp"]["Xmas"] = false
-  params["tmp"]["Xfactor"] = 2
-  params["tmp"]["Xmas balance"] = 0
+  #// params["tmp"]["Xmas"] = false
+  #// params["tmp"]["Xfactor"] = 2
+  #// params["tmp"]["Xmas balance"] = 0
   return
 end
