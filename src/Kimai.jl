@@ -32,7 +32,7 @@ cal.isholiday(::HalfDay, d::Date) = month(d) == 12 && (day(d) == 24 || day(d) ==
 #=
 #* Define interface functions to count work, vacation, and sick-days
 #* that use count_workdays under the hood
-# Issue: rename count_workdays to acknowledge counting of leave days
+# Issue: rename count_workdays (to countdays?) to acknowledge counting of leave days
 # * count_workdays(start, stop, params)
 # * count_sickdays(start, stop, params)
 # * count_vacation(start, stop, params)

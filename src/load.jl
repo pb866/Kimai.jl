@@ -27,7 +27,7 @@ function load!(params::dict)::dict
   load_abscence!(data, params, "vacation")
   @debug "refined stop date" data["stats"]["stop"]
   # Check vacation, issue warnings for low credit/unused vacation
-  # TODO check_vacationcredit(data, params)
+  vacation_balance!(data, params)
   # Return Kimai data
   return data
 end
@@ -102,30 +102,22 @@ function load_abscence!(
       stop=Date[data["stats"]["stop"]],
       days=Int[0]
     )
-    #=
-    # Solution > moved to separate function after loading general data
-    if type == "vacation"
-      data[type].remaining = Int[params["Settings"]["vacation days"]]
-      save_tmp!(data, params)
-    end
-    =#
     return
   end
+
   ## Data processing
   # Read input file
   leave = CSV.read(abscence, DataFrame, stringtype=String, stripwhitespace=true)
-  # Setup balance and deadline parameters for vacation
-  # Fix move to new function
-  # type == "vacation" && save_tmp!(data, params)
+  @debug leave
   # Process dates and convert to date format
   start, stop, days, reason = Date[], Date[], Int[], String[]
-  # Solution > remaining = Int[] moved to new function
   for i = 1:size(leave, 1)
     # Split ranges into start and stop date
     current_date = strip.(split(leave[i, 1], "-"))
     # Process dates, use same stop date as start date for single date
     startdate = Date(current_date[1], dateformat"d.m.y")
     stopdate = length(current_date) == 1 ? startdate : Date(current_date[2], dateformat"d.m.y")
+    @debug "dates" startdate stopdate data["stats"]["start"]
     # Ignore past dates
     startdate > data["stats"]["start"] || continue
     # Save dates of complete period, reason, and the number of leave days
@@ -142,21 +134,13 @@ function load_abscence!(
   end
 
   # Add leave days to dataset
-  @debug "leave" length(reason) length(start) length(stop) length(days) type # fix remove length(remaining), if remaining is calculated in new function
+  @debug "leave" length(reason) length(start) length(stop) length(days) type
   colname = names(leave)[2]
   leave = DataFrame(;reason, start, stop, days)
   df.rename!(leave, [colname, "start", "stop", "days"])
   # Ensure, DataFrame is not empty
   nodata = isempty(leave)
   nodata && push!(leave, (type, data["stats"]["start"], data["stats"]["stop"], 0))
-  # Add remaining vacation days
-  #=
-  # Solution: moved to new function
-  if type == "vacation"
-    @debug "vacation" [params["Settings"]["vacation days"]] leave
-    leave.remaining = nodata ? [params["Settings"]["vacation days"]] : remaining
-  end
-  =#
   # Save data and add balance counter for vacation
   data[type] = leave
   return
@@ -191,154 +175,79 @@ function count_leavedays(params::dict, start::Date, stop::Date, type::String)::I
 end
 
 
-"""
-# ¡obsolete! #
-    vacationaccout!(
-      remaining::Vector{Int},
-      start::Date,
-      stop::Date,
-      params::dict
-    )::Nothing
-Add the balance with `remaining` vacation days based on the previous
-balance and other parameters in `params` for the current vacation (defined by the
-`start` and `stop` day).
-"""
-function offdaycounter!(
-  days::Vector{Int},
-  remaining::Vector{Int},
-  start::Date,
-  stop::Date,
-  type::String,
-  data::dict,
-  params::dict
-)::Nothing
-  # DONE Add offdays and return for non-vacation types
-  offdays = countbdays(params["tmp"]["calendar"], start, stop)
-  if type != "vacation"
-    push!(days, offdays)
-    return
-  end
-  # DONE Apply X-mas rule
-  Xmas, NYE = Date(params["tmp"]["year"], 12, 24), Date(params["tmp"]["year"], 12, 31)
-  vacation = start:Day(1):stop
-  if params["Settings"]["Xmas rule"] && Xmas in vacation && cal.isbday(params["tmp"]["calendar"], Xmas)
-    # Flag Xmas in vacation, if it is a business day and the X-mas rule is active
-    params["tmp"]["Xmas"] = true
-    # Adjust work load balance for Christmas
-    params["tmp"]["Xfactor"] -= 1
-  end
-  if params["tmp"]["Xmas"] && NYE in vacation
-    # Correct vacation, if X-mas and New Year's Eve are taken off
-    offdays -= 1
-    # Adjust work load balance for New Year's Eve
-    params["tmp"]["Xfactor"] -= 1
-  end
-  # TODO Add new vacation at the beginning of the new year
-  if stop > NYE
-    # Check correct balance at the end of the year,
-    # if vacation starts in old year and ends in new year
-    if start ≤ NYE &&
-      params["tmp"]["balance"] - countbdays(params["tmp"]["calendar"], start, NYE) < 0
-      @warn("too much vacation taken before end of year; check whether you are allowed to use next year's vacation",
-         _module=nothing, _group=nothing, _file=nothing, _line=nothing)
-    end
-    # Update year and reset Xmas flag
-    n = year(stop) - params["tmp"]["year"]
-    params["tmp"]["year"] += n
-    params["tmp"]["balance"] += n*params["Settings"]["vacation days"]
-    params["tmp"]["Xmas"] = false
-    # Adjust work balance at X-mas/New Year's Eve, if no vacation is taken
-    @debug NYE data["stats"]["start"] data["stats"]["stop"]
-    if cal.isbday(params["tmp"]["calendar"], Xmas) && data["stats"]["start"] ≤ NYE ≤ data["stats"]["stop"]
-      params["tmp"]["Xmas balance"] -= params["tmp"]["Xfactor"] *
-        0.5params["Settings"]["workload"]/params["Settings"]["workdays"]
-    end
-    @debug(params["tmp"]["year"], params["tmp"]["Xmas balance"], params["tmp"]["Xfactor"],
-      cal.isbday(params["tmp"]["calendar"], Xmas))
-    # Reset Xfactor for work balance corrections to next year
-    params["tmp"]["Xfactor"] = 2
-  end
-  # TODO Cap vacation at vacation deadline
-  if stop > params["tmp"]["deadline"]
-    # Calculate unused vacation days and days in current vacation taken before the cap
-    overhead = params["tmp"]["balance"] - params["tmp"]["factor"]*params["Settings"]["vacation days"]
-    overlap = countbdays(params["tmp"]["calendar"], start, params["tmp"]["deadline"])
-    # Cap the vacation days to maximum allowed number and print warning
-    params["tmp"]["balance"] = min(params["tmp"]["factor"]*params["Settings"]["vacation days"], params["tmp"]["balance"])
-    if start ≤ params["tmp"]["deadline"]
-      # Correct for vacation days taken before the cap
-      params["tmp"]["balance"] += max(min(overlap, overhead), 0)
-      overhead -= overlap
-    end
-    if overhead > 0
-      @warn("$overhead vacation days lost at $(params["tmp"]["deadline"])",
-        _module=nothing, _group=nothing, _file=nothing, _line=nothing)
-    end
-    # Update deadline to next year
-    params["tmp"]["deadline"] += Year(1)
-  end
-  # TODO Update balances for current vacation period
-  params["tmp"]["balance"] -= offdays
-  push!(days, offdays)
-  push!(remaining, params["tmp"]["balance"])
-  # Warn, if too much vacation is used
-  params["tmp"]["balance"] > 0 || @warn(string("not enough vacation left; reduce vacation from ",
-    start, " – ", stop, " and subsequent vacations this year"),
-     _module=nothing, _group=nothing, _file=nothing, _line=nothing)
-  return
-end
+function vacation_balance!(data::dict, params::dict)::Vector{Int}
 
-
-
-"""
-    check_vacationcredit(data::dict, params::dict)::Nothing
-
-Issue infos or warnings about low or expiring vacation stored in `data` using
-thresholds defined in `params`.
-# fix > Rename to vacation_credit! or set_vacationcredit
-"""
-function check_vacationcredit(data::dict, params::dict)::Nothing
-  @debug "vacation credit" params["tmp"]
-  # Get data about unused vacation and the deadline
-  deadline = Date(year(today()), Dates.monthday(params["Settings"]["vacation deadline"])...)
-  unused = data["vacation"].remaining[end] - params["tmp"]["factor"] * params["Settings"]["vacation days"]
-  days_left = deadline - today()
-  # Warn of vacation days running low
-  if 0 < unused ≤ params["Log"]["low vacation"][2]
-    @warn "vacation credit running low; $unused day left" _module=nothing _group=nothing _file=nothing _line=nothing
-  elseif 0 < unused ≤ params["Log"]["low vacation"][1]
-    @info "vacation credit running low; $unused day left"
-  end
-  # Warn of unused vacation days
-  if unused > 0  && days_left < Day(params["Log"]["unused vacation"][2])
-    @warn "$unused unused vacation day(s) expire at $deadline" _module=nothing _group=nothing _file=nothing _line=nothing
-  elseif unused > 0  && days_left < Day(params["Log"]["unused vacation"][1])
-    @info "$unused unused vacation day(s) expire at $deadline"
-  end
-  return
-end
-
-
-"""
-    save_tmp!(data::dict, params::dict)::Nothing
-
-Save parameters calculated from `params` and `data` to a `"tmp"` section in `data`.
-#¿Still needed?#
-"""
-function save_tmp!(data::dict, params::dict)::Nothing
+  ## Initial setup
+  # Set up new dataframe column
+  balance = Int[]
   # Current year
-  params["tmp"]["year"] = year(data["stats"]["start"])
-  # Parameters for vacation days
+  yr = year(params["Recover"]["log ended"])
+  yr > 0 || (yr = year(data["stats"]["start"]))
+  # Parameters for vacation balance
+  vacation = data["vacation"]
   params["tmp"]["balance"] = params["Recover"]["vacation"]
-  params["tmp"]["deadline"] = params["Settings"]["vacation deadline"] + Year(data["stats"]["start"])
-  # params["tmp"]["factor"] = max(1, year(params["Settings"]["vacation deadline"]))
-  # ¿Set elsewhere?
-  if data["stats"]["start"] > params["tmp"]["deadline"]
-    data["tmp"]["deadline"] = Date(year(data["stats"]["start"]),12,31)
+  # Parameters for vacation deadline
+  deadline_frame = year(params["Settings"]["vacation deadline"])
+  # monthday(params["Settings"]["vacation deadline"]) == (12, 31) && (deadline_frame += 1)
+  @debug "deadline frame" deadline_frame
+
+  # Loop over current vacations defined saved to dataframe
+  for i = 1:size(vacation, 1)
+    ## Add new vacation at new year
+    if year(vacation.stop[i]) > yr
+      # Add new vacation for all recent years and set stop year to current year
+      n = year(vacation.stop[i]) - yr
+      yr += n
+      params["tmp"]["balance"] += n*params["Settings"]["vacation days"]
+      # For vacations expanding into the new year, check enough vacation is available in the old year
+      if year(vacation.start[i]) < year(vacation.stop[i])
+        days = count_leavedays(params, vacation.start[i], Date(yr - 1, 12, 31), "vacation")
+        if days > params["tmp"]["balance"] - params["Settings"]["vacation days"] # ℹ Don't consider next year's vacation
+          @warn(
+            "too much vacation taken before end of year; check whether you are allowed to use next year's vacation",
+            _module=nothing, _group=nothing, _file=nothing, _line=nothing
+          )
+        end
+      end
+    end
+    @debug "vacation after New Year's check" params["tmp"]["balance"]
+
+    ## Cut vacation at deadline day
+    deadline = Date(yr, monthday(params["Settings"]["vacation deadline"])...)
+    max_vacfactor = vacation.stop[i] < deadline ? deadline_frame + 1 : deadline_frame
+    # Count days in current vacation to be considered for cut-off
+    days = if vacation.start[i] > deadline
+      0
+    elseif vacation.stop[i] ≤ deadline
+      vacation.days[i]
+    else
+      count_leavedays(params, vacation.start[i], deadline, "vacation")
+    end
+    # Calculate overhead and cut-off
+    overhead = params["tmp"]["balance"] - max_vacfactor*params["Settings"]["vacation days"] - days
+    @debug "overhead" overhead max_vacfactor days
+    if overhead > 0
+
+      warning = vacation.stop[i] < deadline ?
+        "$overhead vacation days were lost in the past" : "$overhead vacation days lost at $deadline"
+        @warn warning _module=nothing _group=nothing _file=nothing _line=nothing
+      params["tmp"]["balance"] -= overhead
+    end
+    @debug "vacation after cut-off" params["tmp"]["balance"]
+    ## Check balance after vacation
+    params["tmp"]["balance"] -= vacation.days[i]
+    @debug "final vacation $(vacation[i, 1])" params["tmp"]["balance"]
+    push!(balance, params["tmp"]["balance"])
+    if params["tmp"]["balance"] < 0
+      @warn(
+        string("not enough vacation left; reduce vacation \"$(vacation[i,1])\" from ",
+        start, " – ", stop, " by $(abs(params["tmp"]["balance"])) days ",
+        "and cancel subsequent vacations this year"),
+        _module=nothing, _group=nothing, _file=nothing, _line=nothing
+      )
+    end
   end
-  # Parameters for X-mas/New Year's corrections
-  #// params["tmp"]["Xmas"] = false
-  #// params["tmp"]["Xfactor"] = 2
-  #// params["tmp"]["Xmas balance"] = 0
-  return
+  ## Add balance to vacation dataframe
+  vacation.balance =balance
+  # TODO Manage log events "low vacation" and "unused vacation"
 end

@@ -79,7 +79,7 @@ function applyXmasrule!(stats::dict, params::dict)::dict
   Xhalf, Xfull = modf((Xmas + NYE)/2)
   Xhalf *= htoms(params["Settings"]["workload"]/params["Settings"]["workdays"])
   @debug "Xmas rule" Xhalf  Xfull
-  begin
+  @debug begin
     println("original stats")
     for key in stats.keys
       println(key, " = ", stats[key])
