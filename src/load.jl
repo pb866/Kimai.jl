@@ -36,7 +36,7 @@ end
 """
     load_kimai!(data::dict, params::dict)::Nothing
 
-Load input data from files defined by `params["Datasets"]` and return as `DataFrame`.
+Load Kimai data from files defined by `params["Datasets"]` and return as `DataFrame`.
 """
 function load_kimai!(data::dict, params::dict)::Nothing
   # Read Kimai history
@@ -80,8 +80,8 @@ end
       type::String
     )::Nothing
 
-Load the `type` of offdays from the `"Datasets"` in `params` to a `DataFrame`,
-add an entry `type` to `data`, and return the `DataFrame`.
+Load the `type` of offdays from the `"Datasets"` in `params` to a `DataFrame` and
+add an entry `type` to `data`.
 """
 function load_abscence!(
   data::dict,
@@ -175,8 +175,14 @@ function count_leavedays(params::dict, start::Date, stop::Date, type::String)::I
 end
 
 
-function vacation_balance!(data::dict, params::dict)::Vector{Int}
+"""
+    vacation_balance!(data::dict, params::dict)::Nothing
 
+From the settings, recover and temporary data in `params`, add a balance column to
+the dataframe in `data["vacation"]` indicating the remaining vacation days and
+return that column
+"""
+function vacation_balance!(data::dict, params::dict)::Nothing
   ## Initial setup
   # Set up new dataframe column
   balance = Int[]
@@ -204,7 +210,8 @@ function vacation_balance!(data::dict, params::dict)::Vector{Int}
         days = count_leavedays(params, vacation.start[i], Date(yr - 1, 12, 31), "vacation")
         if days > params["tmp"]["balance"] - params["Settings"]["vacation days"] # ℹ Don't consider next year's vacation
           @warn(
-            "too much vacation taken before end of year; check whether you are allowed to use next year's vacation",
+            string(remaining_days(days - params["tmp"]["balance"] + params["Settings"]["vacation days"]),
+              " too much vacation taken before end of year; check whether you are allowed to use next year's vacation"),
             _module=nothing, _group=nothing, _file=nothing, _line=nothing
           )
         end
@@ -225,14 +232,9 @@ function vacation_balance!(data::dict, params::dict)::Vector{Int}
     end
     # Calculate overhead and cut-off
     overhead = params["tmp"]["balance"] - max_vacfactor*params["Settings"]["vacation days"] - days
+    overhead > 0 && (params["tmp"]["balance"] -= overhead)
+    log_event(params, vacation.stop[i], deadline, overhead)
     @debug "overhead" overhead max_vacfactor days
-    if overhead > 0
-
-      warning = vacation.stop[i] < deadline ?
-        "$overhead vacation days were lost in the past" : "$overhead vacation days lost at $deadline"
-        @warn warning _module=nothing _group=nothing _file=nothing _line=nothing
-      params["tmp"]["balance"] -= overhead
-    end
     @debug "vacation after cut-off" params["tmp"]["balance"]
     ## Check balance after vacation
     params["tmp"]["balance"] -= vacation.days[i]
@@ -241,13 +243,71 @@ function vacation_balance!(data::dict, params::dict)::Vector{Int}
     if params["tmp"]["balance"] < 0
       @warn(
         string("not enough vacation left; reduce vacation \"$(vacation[i,1])\" from ",
-        start, " – ", stop, " by $(abs(params["tmp"]["balance"])) days ",
-        "and cancel subsequent vacations this year"),
+        vacation.start[i], " – ", vacation.stop[i], " by $(remaining_days(abs(params["tmp"]["balance"]))) ",
+        "and cancel subsequent vacations"),
         _module=nothing, _group=nothing, _file=nothing, _line=nothing
       )
     end
   end
   ## Add balance to vacation dataframe
-  vacation.balance =balance
-  # TODO Manage log events "low vacation" and "unused vacation"
+  vacation.balance = balance
+  # Log low vacation
+  log_event(params, vacation)
 end
+
+
+"""
+    function log_event(
+      params::dict,
+      vacationend::Date,
+      deadline::Date,
+      overhead::Int
+    )::Nothing
+
+Informs or warns (based on the settings in `params`) about unused vacation (`overhead`)
+on `deadline` day. The `vacationend` is used to determine whether the cut-off already
+occurred in the past.
+"""
+function log_event(
+  params::dict,
+  vacationend::Date,
+  deadline::Date,
+  overhead::Int
+)::Nothing
+  # Ret
+  (overhead ≤ 0 || deadline - today() > Day(params["Log"]["unused vacation"][1])) && return
+  msg = "unused vacation: $(remaining_days(overhead)) expire at $deadline"
+  if deadline < today() || vacationend < deadline
+    @warn "$overhead vacation days were lost before $vacationend" _module=nothing _group=nothing _file=nothing _line=nothing
+  elseif deadline - today() ≤ Day(params["Log"]["unused vacation"][2])
+    @warn msg _module=nothing _group=nothing _file=nothing _line=nothing
+  else
+    @info msg _module=nothing _group=nothing _file=nothing _line=nothing
+  end
+end
+
+
+"""
+    log_event(params::dict, vacation::DataFrame)::Nothing
+
+Informs or warns (based on the thresholds in `params`), if remaining `vacation` is
+running low.
+"""
+function log_event(params::dict, vacation::DataFrame)::Nothing
+  # Warn of vacation days running low
+  unused = vacation.balance[end]
+  msg = "remaining vacation low; $(remaining_days(unused)) left"
+  if 0 ≤ unused ≤ params["Log"]["low vacation"][2]
+    @warn msg _module=nothing _group=nothing _file=nothing _line=nothing
+  elseif 0 ≤ unused ≤ params["Log"]["low vacation"][1]
+    @info msg
+  end
+end
+
+
+"""
+    remaining_days(d::Int)::String
+
+Return a String `d day(s)` using the correct grammatical form.
+"""
+remaining_days(d::Int)::String = d == 1 ? "1 day" : string(d, " days")
